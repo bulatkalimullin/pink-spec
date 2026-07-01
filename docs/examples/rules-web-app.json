@@ -23,6 +23,8 @@
   },
   "output": {
     "language": "en",
+    "ui_language": "en",
+    "validate_language": true,
     "format": "markdown",
     "include_diagrams": true
   },

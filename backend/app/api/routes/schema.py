@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.schemas.rules import Rules
+from app.services.language_validator import SUPPORTED_LANGUAGES
 
 router = APIRouter(prefix="/api/v1", tags=["schema"])
 
@@ -12,6 +13,16 @@ router = APIRouter(prefix="/api/v1", tags=["schema"])
 @router.get("/schema/rules")
 async def get_rules_schema():
     return Rules.model_json_schema()
+
+
+@router.get("/languages")
+async def get_supported_languages():
+    return {
+        "languages": [
+            {"code": code, **meta} for code, meta in SUPPORTED_LANGUAGES.items()
+        ],
+        "default": "en",
+    }
 
 
 @router.get("/spec-levels")
