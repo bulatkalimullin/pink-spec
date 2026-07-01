@@ -40,11 +40,25 @@ export async function getRulesSchema() {
   return r.json();
 }
 
+export async function getLanguages() {
+  const r = await fetch(`${BASE}/languages`);
+  if (!r.ok) throw new Error("Failed to load languages");
+  return r.json();
+}
+
 export async function submitAnswer(sessionId: string, questionId: string, answer: unknown) {
   return fetch(`${BASE}/sessions/${sessionId}/answers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question_id: questionId, answer }),
+  });
+}
+
+export async function submitAnswersBatch(sessionId: string, answers: Record<string, unknown>) {
+  return fetch(`${BASE}/sessions/${sessionId}/answers/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers }),
   });
 }
 
@@ -129,6 +143,8 @@ export interface SessionMetricsSummary {
   completed_at: string;
   duration_sec: number;
   quality_score: number;
+  project_name?: string | null;
+  output_slug?: string | null;
   artifacts_count: number;
   tasks_total: number;
   errors_count: number;
@@ -214,4 +230,40 @@ export async function rebuildStats(force = false) {
   const r = await fetch(`${BASE}/stats/rebuild?force=${force}`, { method: "POST" });
   if (!r.ok) throw new Error("Rebuild failed");
   return r.json() as Promise<{ processed: number; skipped: number; errors: number; message: string }>;
+}
+
+export interface ProjectSummary {
+  session_id: string;
+  project_name: string | null;
+  output_slug: string;
+  status: string;
+  spec_level: string;
+  idea_preview?: string;
+  created_at: string;
+  updated_at: string;
+  disk_size_mb: number;
+  has_metrics: boolean;
+}
+
+export async function listProjects(params?: { limit?: number; offset?: number }) {
+  const q = new URLSearchParams();
+  if (params?.limit) q.set("limit", String(params.limit));
+  if (params?.offset) q.set("offset", String(params.offset));
+  const r = await fetch(`${BASE}/projects?${q}`);
+  if (!r.ok) throw new Error("Failed to load projects");
+  return r.json() as Promise<{
+    projects: ProjectSummary[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>;
+}
+
+export async function deleteProject(sessionId: string) {
+  const r = await fetch(`${BASE}/projects/${sessionId}`, { method: "DELETE" });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? "Delete failed");
+  }
+  return r.json();
 }

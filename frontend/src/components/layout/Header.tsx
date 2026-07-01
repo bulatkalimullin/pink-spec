@@ -1,5 +1,7 @@
-import { BarChart3, Bell, Settings, Zap } from "lucide-react";
+import { BarChart3, Bell, FolderKanban, Settings, Zap } from "lucide-react";
 import { Link } from "react-router-dom";
+import LanguageSelector from "@/components/LanguageSelector";
+import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import { useSessionStore } from "@/stores/sessionStore";
 
@@ -47,6 +49,7 @@ interface HeaderProps {
 
 export default function Header({ sessionId, onNotificationsClick }: HeaderProps) {
   const { wsStatus, specLevel, sessionStatus, unreadCount } = useSessionStore();
+  const { t } = useI18n();
 
   return (
     <header className="sticky top-0 z-40 flex h-12 min-w-0 items-center gap-2 border-b border-border bg-card/80 px-3 backdrop-blur-sm sm:gap-4 sm:px-4">
@@ -118,16 +121,27 @@ export default function Header({ sessionId, onNotificationsClick }: HeaderProps)
       </button>
 
       <Link
+        to="/projects"
+        className="shrink-0 rounded-md p-1.5 hover:bg-accent transition-colors"
+        title={t.nav.projects}
+      >
+        <FolderKanban className="h-4 w-4 text-muted-foreground" />
+      </Link>
+
+      <Link
         to="/statistics"
         className="shrink-0 rounded-md p-1.5 hover:bg-accent transition-colors"
-        title="Статистика"
+        title={t.nav.statistics}
       >
         <BarChart3 className="h-4 w-4 text-muted-foreground" />
       </Link>
 
+      <LanguageSelector compact className="hidden sm:block" />
+
       <Link
         to="/settings"
         className="shrink-0 rounded-md p-1.5 hover:bg-accent transition-colors"
+        title={t.nav.settings}
       >
         <Settings className="h-4 w-4 text-muted-foreground" />
       </Link>

@@ -5,6 +5,7 @@ import AgentWorkspace from "./pages/AgentWorkspace";
 import ArtifactsViewer from "./pages/ArtifactsViewer";
 import Settings from "./pages/Settings";
 import Statistics from "./pages/Statistics";
+import ProjectsAdmin from "./pages/ProjectsAdmin";
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
       <Route path="/artifacts/:sessionId" element={<ArtifactsViewer />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/statistics" element={<Statistics />} />
+      <Route path="/projects" element={<ProjectsAdmin />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
