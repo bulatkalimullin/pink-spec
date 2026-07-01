@@ -8,7 +8,7 @@ import structlog
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import rag, schema, sessions, stats, system
+from app.api.routes import projects, rag, schema, sessions, stats, system
 from app.api.websocket import ws_session_handler
 from app.config import get_settings
 from app.db.connection import init_db
@@ -29,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(sessions.router)
+app.include_router(projects.router)
 app.include_router(system.router)
 app.include_router(stats.router)
 app.include_router(rag.router)
@@ -142,6 +143,13 @@ async def startup():
     settings = get_settings()
     await init_db()
     await init_providers()
+
+    from app.services.output_migration import migrate_output_folders
+    from app.services.output_paths import load_all_output_slugs
+
+    await load_all_output_slugs()
+    migration_result = await migrate_output_folders()
+    logger.info("output_migration_complete", **migration_result)
 
     asyncio.create_task(log_bus.run_persist_worker())
     asyncio.create_task(system_monitor.run())
