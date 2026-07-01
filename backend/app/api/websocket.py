@@ -1,0 +1,121 @@
+"""WebSocket handler — subscribes to LogBus and streams events to the client."""
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timezone
+
+import structlog
+from fastapi import WebSocket, WebSocketDisconnect
+
+from app.services.log_bus import log_bus
+from app.services.session import get_session, answer_question
+from app.services.session_watchdog import watchdog
+
+logger = structlog.get_logger(__name__)
+
+HEARTBEAT_INTERVAL = 30  # seconds
+RECONNECT_LOG_TAIL = 200  # events to send on reconnect
+
+
+async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
+    await websocket.accept()
+    logger.info("ws_connected", session_id=session_id)
+
+    q = log_bus.subscribe(session_id)
+
+    # Send snapshot on reconnect (session history)
+    session = await get_session(session_id)
+    if session:
+        history = await log_bus.get_log_history(session_id, from_seq=0, limit=RECONNECT_LOG_TAIL)
+        await websocket.send_text(json.dumps({
+            "type": "session_snapshot",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_id": session_id,
+            "payload": {
+                "status": session.get("status"),
+                "log_tail": history,
+            },
+        }))
+
+    # Heartbeat
+    async def heartbeat() -> None:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            try:
+                await websocket.send_text(json.dumps({"type": "ping", "session_id": session_id}))
+            except Exception:
+                break
+
+    # Send queue → client
+    async def sender() -> None:
+        while True:
+            try:
+                envelope = await asyncio.wait_for(q.get(), timeout=60.0)
+                await websocket.send_text(json.dumps(envelope, default=str))
+            except TimeoutError:
+                continue
+            except Exception:
+                break
+
+    # Receive client messages
+    async def receiver() -> None:
+        while True:
+            try:
+                raw = await websocket.receive_text()
+                msg = json.loads(raw)
+                await _handle_client_message(session_id, msg)
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.warning("ws_receive_error", error=str(e))
+
+    tasks = [
+        asyncio.create_task(sender()),
+        asyncio.create_task(receiver()),
+        asyncio.create_task(heartbeat()),
+    ]
+
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        log_bus.unsubscribe(session_id, q)
+        logger.info("ws_disconnected", session_id=session_id)
+
+
+async def _handle_client_message(session_id: str, msg: dict) -> None:
+    msg_type = msg.get("type")
+
+    if msg_type == "answer":
+        question_id = msg.get("question_id", "")
+        answer = msg.get("answer")
+        await answer_question(session_id, question_id, answer)
+        watchdog.deliver_answer(question_id, answer)
+
+    elif msg_type == "cancel":
+        state = watchdog.get_state(session_id)
+        if state:
+            state.status = "failed"
+        await log_bus.emit(session_id, "log_entry", {
+            "level": "warn", "agent_id": "system",
+            "message": "Session cancelled by user"
+        })
+
+    elif msg_type in ("pause", "resume"):
+        state = watchdog.get_state(session_id)
+        if state:
+            state.status = "paused" if msg_type == "pause" else "running"
+        await log_bus.emit(session_id, "log_entry", {
+            "level": "info", "agent_id": "system",
+            "message": f"Session {msg_type}d by user"
+        })
+
+    elif msg_type == "request_snapshot":
+        session = await get_session(session_id)
+        history = await log_bus.get_log_history(session_id, from_seq=msg.get("from_seq", 0), limit=500)
+        await log_bus.emit(session_id, "session_snapshot", {
+            "status": session.get("status") if session else "unknown",
+            "log_tail": history,
+        })

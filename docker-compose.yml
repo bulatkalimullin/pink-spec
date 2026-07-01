@@ -1,0 +1,91 @@
+# Pink Spec Agent — Docker Compose
+# Запуск: make up
+#
+# Ollama: на хосте (default) или в контейнере — profile ollama-docker
+# Зеркала: mirrors.env
+
+x-mirror-build-args: &mirror-build-args
+  DOCKER_MIRROR: ${DOCKER_MIRROR:-dockerhub.timeweb.cloud}
+  PYPI_MIRROR: ${PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+  NPM_REGISTRY_FALLBACK: ${NPM_REGISTRY_FALLBACK:-https://mirrors.aliyun.com/npm/}
+
+services:
+  # Прокси: snap-Ollama слушает 127.0.0.1, Docker не видит — пробрасываем на :11435
+  ollama-proxy:
+    image: dockerhub.timeweb.cloud/alpine/socat:latest
+    container_name: pink-spec-ollama-proxy
+    network_mode: host
+    command: TCP-LISTEN:11435,fork,reuseaddr TCP:127.0.0.1:11434
+    restart: unless-stopped
+
+  ollama:
+    profiles: ["ollama-docker"]
+    image: ollama/ollama:latest
+    container_name: pink-spec-ollama
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./models:/models
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    runtime: ${DOCKER_GPU_RUNTIME:-nvidia}
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args: *mirror-build-args
+    container_name: pink-spec-backend
+    env_file:
+      - .env
+      - mirrors.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - pink-data:/data
+      - pink-output:/output
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
+      - SQLITE_PATH=/data/pink_spec.db
+      - VECTOR_PATH=/data/vectors
+      - OUTPUT_PATH=/output
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_MIRROR: ${DOCKER_MIRROR:-dockerhub.timeweb.cloud}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        NPM_REGISTRY_FALLBACK: ${NPM_REGISTRY_FALLBACK:-https://mirrors.aliyun.com/npm/}
+    container_name: pink-spec-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pink-data:
+  pink-output:
+  ollama-data:

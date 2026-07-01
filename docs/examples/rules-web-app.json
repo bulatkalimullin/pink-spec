@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0",
+  "spec_level": "L3",
+  "project": {
+    "name": "task-tracker",
+    "domain": "productivity",
+    "idea_summary": "SaaS task tracker for remote teams with Kanban boards, real-time updates, and time tracking"
+  },
+  "constraints": {
+    "stack": {
+      "backend": ["python", "fastapi", "postgresql"],
+      "frontend": ["react", "typescript", "shadcn"],
+      "forbidden": ["php", "jquery"]
+    },
+    "deployment": "cloud",
+    "budget": "medium",
+    "timeline_weeks": 12
+  },
+  "nfr": {
+    "latency_p95_ms": 200,
+    "availability": "99.9%",
+    "security": ["oauth2", "rbac", "audit_log", "data_encryption"]
+  },
+  "output": {
+    "language": "en",
+    "format": "markdown",
+    "include_diagrams": true
+  },
+  "agent_rules": [
+    {
+      "id": "multi_tenant",
+      "priority": "critical",
+      "rule": "All data must be strictly tenant-isolated at the database level using row-level security"
+    },
+    {
+      "id": "api_first",
+      "priority": "high",
+      "rule": "Design API first; UI should be a consumer of the same API used by potential third-party integrations"
+    },
+    {
+      "id": "real_time",
+      "priority": "high",
+      "rule": "Real-time collaboration must use WebSockets; SSE is acceptable fallback"
+    },
+    {
+      "id": "mobile_ready",
+      "priority": "medium",
+      "rule": "UI must be responsive and mobile-friendly from day one"
+    }
+  ],
+  "ollama": {
+    "llm_model": "llama3.2",
+    "fallback_models": ["mistral"],
+    "embedding_model": "nomic-embed-text",
+    "embedding_fallback": "keyword",
+    "temperature": 0.15,
+    "max_tokens": 4096,
+    "keep_alive": "5m",
+    "timeout_sec": 120,
+    "retry_on_error": 3,
+    "retry_backoff_sec": [2, 5, 15]
+  },
+  "rag": {
+    "enabled": true,
+    "sources": [],
+    "top_k": 10,
+    "saturation": {
+      "max_iterations": 5,
+      "novelty_threshold": 0.15,
+      "min_chunks": 12,
+      "query_expansion": true
+    }
+  },
+  "context": {
+    "summarization_enabled": true,
+    "max_raw_turns": 6,
+    "compress_at_token_pct": 70
+  },
+  "monitoring": {
+    "enabled": true,
+    "interval_sec": 3,
+    "warn_cpu_pct": 90,
+    "warn_ram_pct": 85,
+    "warn_gpu_mem_pct": 90,
+    "show_per_core": false
+  },
+  "resilience": {
+    "agent_timeout_sec": 600,
+    "stuck_detection_sec": 300,
+    "hitl_timeout_sec": 3600,
+    "max_review_cycles": 10,
+    "circuit_breaker_failures": 3,
+    "circuit_breaker_cooldown_sec": 60,
+    "checkpoint_every_agent": true,
+    "auto_resume_on_reconnect": true
+  }
+}

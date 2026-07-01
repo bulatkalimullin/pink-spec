@@ -1,0 +1,12 @@
+[[index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[[index]]
+url = "https://mirrors.aliyun.com/pypi/simple"
+name = "aliyun"
+
+[[index]]
+url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-cu124"
+explicit = true

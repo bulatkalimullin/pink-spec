@@ -1,0 +1,107 @@
+"""Researcher agent — RAG retrieval and context enrichment."""
+from __future__ import annotations
+
+from typing import Any
+
+from app.agent.agents.base import BaseAgent
+from app.agent.state import MultiAgentState
+from app.services.log_bus import log_bus
+
+
+class ResearcherAgent(BaseAgent):
+    agent_id = "researcher"
+
+    def __init__(self, llm, embedding_provider, rag_cfg: dict) -> None:
+        super().__init__(llm)
+        self._embedding_provider = embedding_provider
+        self._rag_cfg = rag_cfg
+
+    async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
+        session_id = state["session_id"]
+        rules = state["rules"]
+        rag_cfg = rules.get("rag", {})
+
+        if not rag_cfg.get("enabled", False):
+            await self._log(session_id, "info", "RAG disabled — skipping researcher phase")
+            saturation_report = {"status": "skipped", "iterations": 0, "chunks_collected": 0, "context_brief": ""}
+            return {
+                **state,
+                "agent_outputs": {**state.get("agent_outputs", {}), "researcher": "skipped"},
+                "saturation_report": saturation_report,
+                "current_agent": "supervisor",
+            }
+
+        from app.rag.retriever import ChromaRetriever, BM25Retriever
+        from app.rag.ingest import ingest_sources
+        from app.rag.saturation import run_saturation
+
+        # Build retriever
+        try:
+            retriever = ChromaRetriever(session_id=session_id, embedding_provider=self._embedding_provider)
+        except Exception as e:
+            await self._log(session_id, "warn", f"ChromaDB unavailable ({e}), using BM25 fallback")
+            await log_bus.emit(session_id, "fallback_triggered", {
+                "layer": "rag", "step": "retriever",
+                "from": "chroma", "to": "bm25",
+                "message": f"ChromaDB unavailable: {e}",
+            })
+            retriever = BM25Retriever()
+
+        # Ingest sources
+        sources = rag_cfg.get("sources", [])
+        if sources:
+            await self._log(session_id, "info", f"Ingesting {len(sources)} source(s)...")
+            ingest_result = await ingest_sources(sources, retriever, session_id)
+            await self._log(
+                session_id, "info",
+                f"Ingest complete: {ingest_result['files_ok']} files, {ingest_result['chunks']} chunks"
+            )
+
+        # Saturation
+        idea = state["idea"]
+        seed_queries = [
+            idea,
+            f"{rules.get('project', {}).get('domain', '')} best practices",
+            f"{rules.get('project', {}).get('name', '')} architecture patterns",
+        ]
+        sat_cfg = {**rag_cfg.get("saturation", {}), "top_k": rag_cfg.get("top_k", 8)}
+
+        try:
+            saturation_report = await run_saturation(
+                session_id=session_id,
+                seed_queries=seed_queries,
+                embedding_provider=self._embedding_provider,
+                retriever=retriever,
+                cfg=sat_cfg,
+            )
+        except Exception as e:
+            await self._log(session_id, "warn", f"RAG saturation failed ({e}), skipping researcher phase")
+            await log_bus.emit(session_id, "fallback_triggered", {
+                "layer": "rag", "step": "saturation",
+                "from": "chroma", "to": "skipped",
+                "message": str(e),
+            })
+            saturation_report = {
+                "status": "skipped",
+                "iterations": 0,
+                "chunks_collected": 0,
+                "context_brief": "",
+                "query_history": seed_queries,
+            }
+
+        await self._log(
+            session_id, "info",
+            f"Saturation {saturation_report['status']}: {saturation_report['chunks_collected']} chunks in {saturation_report['iterations']} iterations"
+        )
+
+        # Update context state
+        new_context = dict(state.get("context", {}))
+        new_context["saturation_report"] = saturation_report
+
+        return {
+            **state,
+            "agent_outputs": {**state.get("agent_outputs", {}), "researcher": saturation_report["status"]},
+            "saturation_report": saturation_report,
+            "context": new_context,
+            "current_agent": "supervisor",
+        }

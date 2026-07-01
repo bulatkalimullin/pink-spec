@@ -1,0 +1,60 @@
+# Environment & secrets
+.env
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Runtime data (local sessions, vectors, exports)
+data/
+!data/.gitkeep
+output/
+!output/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# Local model weights (Ollama pulls separately; see models/README.md)
+models/llm/*.gguf
+models/embeddings/**/*
+!models/**/.gitkeep
+!models/README.md
+!models/embeddings/all-MiniLM-L6-v2/README.md
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+logs/
+tmp/
+.cache/
+
+# Cursor / local tooling (optional)
+.cursor/

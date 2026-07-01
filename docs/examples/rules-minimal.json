@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "spec_level": "L1",
+  "project": {
+    "name": "my-project",
+    "domain": "general",
+    "idea_summary": "Describe your project idea here"
+  },
+  "constraints": {
+    "stack": {
+      "backend": [],
+      "frontend": [],
+      "forbidden": []
+    },
+    "deployment": "local",
+    "budget": "low",
+    "timeline_weeks": 4
+  },
+  "nfr": {},
+  "output": {
+    "language": "en",
+    "format": "markdown",
+    "include_diagrams": false
+  },
+  "agent_rules": [],
+  "ollama": {
+    "llm_model": "llama3.2",
+    "fallback_models": [],
+    "embedding_model": "nomic-embed-text",
+    "embedding_fallback": "keyword",
+    "temperature": 0.2,
+    "max_tokens": 2048,
+    "keep_alive": "5m",
+    "timeout_sec": 120,
+    "retry_on_error": 2,
+    "retry_backoff_sec": [2, 5]
+  },
+  "rag": {
+    "enabled": false,
+    "sources": [],
+    "top_k": 5,
+    "saturation": {
+      "max_iterations": 3,
+      "novelty_threshold": 0.2,
+      "min_chunks": 5,
+      "query_expansion": false
+    }
+  },
+  "context": {
+    "summarization_enabled": true,
+    "max_raw_turns": 4,
+    "compress_at_token_pct": 75
+  },
+  "monitoring": {
+    "enabled": true,
+    "interval_sec": 5,
+    "warn_cpu_pct": 90,
+    "warn_ram_pct": 90,
+    "warn_gpu_mem_pct": 90,
+    "show_per_core": false
+  },
+  "resilience": {
+    "agent_timeout_sec": 300,
+    "stuck_detection_sec": 180,
+    "hitl_timeout_sec": 1800,
+    "max_review_cycles": 5,
+    "circuit_breaker_failures": 3,
+    "circuit_breaker_cooldown_sec": 60,
+    "checkpoint_every_agent": false,
+    "auto_resume_on_reconnect": true
+  }
+}

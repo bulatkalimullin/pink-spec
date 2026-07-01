@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 4%;
+    --foreground: 210 20% 95%;
+    --card: 240 6% 10%;
+    --card-foreground: 210 20% 95%;
+    --popover: 240 6% 10%;
+    --popover-foreground: 210 20% 95%;
+    --primary: 330 70% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 4% 16%;
+    --secondary-foreground: 210 20% 95%;
+    --muted: 240 4% 16%;
+    --muted-foreground: 210 10% 60%;
+    --accent: 240 4% 20%;
+    --accent-foreground: 210 20% 95%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 330 70% 60%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans overflow-x-hidden;
+    font-family: "Inter", sans-serif;
+  }
+  code, pre, .font-mono {
+    font-family: "JetBrains Mono", monospace;
+  }
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+/* Level badges */
+.badge-L1 { @apply bg-sky-900/40 text-sky-300 border-sky-700; }
+.badge-L2 { @apply bg-emerald-900/40 text-emerald-300 border-emerald-700; }
+.badge-L3 { @apply bg-violet-900/40 text-violet-300 border-violet-700; }
+.badge-L4 { @apply bg-pink-900/40 text-pink-300 border-pink-700; }
+
+/* Status colors */
+.status-running { @apply text-emerald-400; }
+.status-stuck { @apply text-amber-400; }
+.status-failed { @apply text-red-400; }
+.status-completed { @apply text-pink-400; }
+.status-degraded { @apply text-orange-400; }
+.status-paused { @apply text-sky-400; }
+
+/* Log level colors */
+.log-debug { @apply text-zinc-500; }
+.log-info { @apply text-zinc-300; }
+.log-warn { @apply text-amber-400; }
+.log-error { @apply text-red-400; }
