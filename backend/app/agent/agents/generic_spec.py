@@ -6,14 +6,18 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
-from app.services.artifact_store import save_artifact, summarize_artifacts
+from app.services.artifact_store import summarize_artifacts
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior technical specification writer.
 Produce a detailed Markdown specification document for the requested deliverable.
 
+The document MUST start with metadata including exactly:
+**Artifact Key:** <artifact_key from the request>
+
 Structure the document with clear headings, actionable details, and explicit [ASSUMPTION] markers where you infer facts.
 Reference related specifications when provided in context.
+Do NOT copy boilerplate from other artifacts — each deliverable must be unique to its artifact key.
 """
 
 
@@ -57,7 +61,12 @@ class GenericSpecAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", f"Generating {name}...")
-        output = await self._generate(state, messages)
+        placeholder, mode, output, new_assumptions = await self._write_spec_artifact(
+            state,
+            artifact_key,
+            generate_messages=messages,
+            artifact_label=name,
+        )
 
         await log_bus.emit(
             session_id,
@@ -65,11 +74,11 @@ class GenericSpecAgent(BaseAgent):
             {
                 "artifact_type": artifact_key,
                 "chunk": output[:500],
+                "mode": mode,
             },
         )
 
         run_id = step_id
-        placeholder = await save_artifact(session_id, artifact_key, output)
         return {
             **state,
             "agent_outputs": {
@@ -77,6 +86,7 @@ class GenericSpecAgent(BaseAgent):
                 run_id: output[:200] + "…" if len(output) > 200 else output,
             },
             "artifacts": {**state.get("artifacts", {}), artifact_key: placeholder},
+            "assumptions": self._merge_assumptions(state, new_assumptions),
             "current_agent": "supervisor",
             "current_step": None,
         }

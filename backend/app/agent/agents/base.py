@@ -14,6 +14,12 @@ from app.agent.stage_progress import (
     record_agent_duration,
 )
 from app.agent.state import MultiAgentState
+from app.services.artifact_quality import ArtifactQualityError, validate_artifact_for_save
+from app.services.language_validator import (
+    output_language_instruction,
+    should_validate_language,
+    validate_artifact_language,
+)
 from app.services.log_bus import log_bus
 from app.services.session_runner import session_runner
 
@@ -30,7 +36,28 @@ _AGENT_NAMES = {
     "context_manager": "Context Manager",
     "pipeline_planner": "Pipeline Planner",
     "generic_spec": "Specification",
+    "refinement_fixer": "Refinement Fixer",
 }
+
+PATCH_SYSTEM_PROMPT = """You are a specification editor. Improve the existing document with minimal targeted changes.
+
+Do NOT rewrite the entire document. Return ONLY SEARCH/REPLACE blocks in this exact format:
+
+<<<<<<< SEARCH
+exact text copied from the document (must match verbatim)
+=======
+replacement text
+>>>>>>> REPLACE
+
+Rules:
+- Each SEARCH block must match the file exactly (including whitespace).
+- Make the smallest change that fixes the listed review issues.
+- You may return multiple blocks.
+- No markdown fences around the blocks. No commentary outside blocks.
+"""
+
+PATCH_REPAIR_PROMPT = """Your previous response had no valid or applicable SEARCH/REPLACE blocks.
+Return ONLY corrected SEARCH/REPLACE blocks. Copy SEARCH text exactly from the document provided."""
 
 
 class BaseAgent:
@@ -158,16 +185,177 @@ class BaseAgent:
     async def _generate(self, state: MultiAgentState, messages: list[dict], **extra: Any) -> str:
         return await self._llm.generate(messages, **self._llm_kwargs(state, **extra))
 
+    def _artifacts_cfg(self, state: MultiAgentState) -> dict[str, Any]:
+        return state.get("rules", {}).get("artifacts", {}) or {}
+
+    def _should_patch_artifact(self, state: MultiAgentState, artifact_key: str) -> bool:
+        from app.services.artifact_store import artifact_exists
+
+        cfg = self._artifacts_cfg(state)
+        mode = cfg.get("mode", "auto")
+        if mode == "generate":
+            return False
+        if mode == "patch":
+            return artifact_exists(state["session_id"], artifact_key)
+        return artifact_exists(state["session_id"], artifact_key)
+
+    def _format_refinement_issues(self, state: MultiAgentState, artifact_key: str) -> str:
+        issues = (state.get("refinement_issues") or {}).get(artifact_key, [])
+        if not issues:
+            return "Improve overall quality, completeness, and consistency."
+        lines = []
+        for issue in issues:
+            sev = issue.get("severity", "medium")
+            desc = issue.get("description", "")
+            loc = issue.get("location", "")
+            lines.append(f"- [{sev}] {desc} (at {loc})")
+        return "\n".join(lines)
+
+    async def _write_spec_artifact(
+        self,
+        state: MultiAgentState,
+        artifact_key: str,
+        *,
+        generate_messages: list[dict],
+        artifact_label: str,
+    ) -> tuple[str, str, str, list[str]]:
+        """
+        Generate a new artifact or patch an existing one on disk.
+        Returns (placeholder, mode, preview_text, extracted_assumptions).
+        """
+        from app.services.artifact_patcher import annotate_lines
+        from app.services.artifact_store import (
+            emit_artifact_generated,
+            placeholder_for,
+            read_artifact,
+            save_artifact,
+            save_artifact_patched,
+        )
+
+        session_id = state["session_id"]
+
+        async def _generate_and_validate(messages: list[dict]) -> tuple[str, list[str]]:
+            output = await self._generate(state, messages)
+            rules = state.get("rules") or {}
+
+            def _run_gates(text: str) -> tuple[str, list[str]]:
+                content, assumptions = validate_artifact_for_save(
+                    session_id,
+                    artifact_key,
+                    text,
+                    check_duplicates=self.agent_id == "generic_spec",
+                    require_key=self.agent_id == "generic_spec",
+                )
+                if should_validate_language(rules):
+                    expected = str((rules.get("output") or {}).get("language", "en"))
+                    lang_result = validate_artifact_language(content, artifact_key, expected)
+                    if not lang_result.passed:
+                        raise ArtifactQualityError("; ".join(lang_result.violations))
+                return content, assumptions
+
+            try:
+                return _run_gates(output)
+            except ArtifactQualityError as e:
+                await self._log(
+                    session_id,
+                    "warn",
+                    f"Artifact quality check failed for {artifact_key}: {e}. Retrying...",
+                )
+                lang_hint = output_language_instruction(rules)
+                repair = messages + [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your output failed validation: {e}\n"
+                            f"{lang_hint}\n"
+                            f"Regenerate the full document. "
+                            f"First line after title MUST be: **Artifact Key:** {artifact_key}\n"
+                            f"Do not duplicate content from other specification files."
+                        ),
+                    },
+                ]
+                output = await self._generate(state, repair)
+                return _run_gates(output)
+
+        if not self._should_patch_artifact(state, artifact_key):
+            output, new_assumptions = await _generate_and_validate(generate_messages)
+            placeholder = await save_artifact(session_id, artifact_key, output)
+            await emit_artifact_generated(session_id, artifact_key, output)
+            return placeholder, "generate", output, new_assumptions
+
+        max_chars = int(self._artifacts_cfg(state).get("max_patch_chars", 24000))
+        try:
+            current = await asyncio.to_thread(read_artifact, session_id, artifact_key)
+        except FileNotFoundError:
+            output, new_assumptions = await _generate_and_validate(generate_messages)
+            placeholder = await save_artifact(session_id, artifact_key, output)
+            await emit_artifact_generated(session_id, artifact_key, output)
+            return placeholder, "generate", output, new_assumptions
+
+        body = current if len(current) <= max_chars else current[:max_chars]
+        annotated = annotate_lines(body)
+        issues_text = self._format_refinement_issues(state, artifact_key)
+
+        patch_messages = [
+            {"role": "system", "content": PATCH_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Artifact: {artifact_label} ({artifact_key})\n\n"
+                    f"Review issues to fix:\n{issues_text}\n\n"
+                    f"Current document:\n{annotated}"
+                ),
+            },
+        ]
+
+        await self._log(session_id, "info", f"Patching {artifact_label} ({artifact_key})...")
+        raw = await self._generate(state, patch_messages)
+        placeholder, result, mode = await save_artifact_patched(
+            session_id, artifact_key, raw, original_content=current
+        )
+
+        if mode == "unchanged" and result.applied == 0:
+            await self._log(session_id, "warn", f"Patch failed for {artifact_key}; retrying...")
+            repair_messages = patch_messages + [
+                {"role": "assistant", "content": raw[:4000]},
+                {"role": "user", "content": PATCH_REPAIR_PROMPT},
+            ]
+            raw = await self._generate(state, repair_messages)
+            placeholder, result, mode = await save_artifact_patched(
+                session_id, artifact_key, raw, original_content=current
+            )
+
+        if mode == "unchanged":
+            await self._log(
+                session_id,
+                "warn",
+                f"Keeping existing {artifact_key} — patches did not apply",
+            )
+            from app.services.artifact_quality import extract_assumptions
+
+            return placeholder_for(len(current)), "unchanged", current, extract_assumptions(current)
+
+        patched_content = await asyncio.to_thread(read_artifact, session_id, artifact_key)
+        return placeholder, mode, patched_content, extract_assumptions(patched_content)
+
+    def _merge_assumptions(self, state: MultiAgentState, new_assumptions: list[str]) -> list[str]:
+        merged = list(state.get("assumptions", []))
+        for text in new_assumptions:
+            entry = f"{self.agent_id}: {text}"
+            if entry not in merged:
+                merged.append(entry)
+        return merged
+
     def _rules_snapshot(self, state: MultiAgentState) -> str:
         rules = state.get("rules", {})
         agent_rules = rules.get("agent_rules", [])
         high_rules = [r for r in agent_rules if r.get("priority") in ("critical", "high")]
-        if not high_rules:
-            return ""
-        lines = ["[Critical/High Rules]"]
-        for r in high_rules:
-            lines.append(f"- [{r['priority'].upper()}] {r['rule']}")
-        return "\n".join(lines)
+        parts: list[str] = [output_language_instruction(rules)]
+        if high_rules:
+            parts.append("[Critical/High Rules]")
+            for r in high_rules:
+                parts.append(f"- [{r['priority'].upper()}] {r['rule']}")
+        return "\n".join(parts)
 
     async def _log(self, session_id: str, level: str, message: str) -> None:
         await log_bus.emit(

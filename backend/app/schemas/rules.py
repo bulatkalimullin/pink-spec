@@ -74,10 +74,22 @@ class NFRConfig(BaseModel):
     security: list[str] = Field(default_factory=list)
 
 
+class OutputLanguage(StrEnum):
+    en = "en"
+    ru = "ru"
+
+
 class OutputConfig(BaseModel):
-    language: str = "en"
+    """Language applies to generated specs; ui_language defaults to same value."""
+
+    language: OutputLanguage = OutputLanguage.en
+    ui_language: OutputLanguage | None = None
+    validate_language: bool = True
     format: str = "markdown"
     include_diagrams: bool = True
+
+    def resolved_ui_language(self) -> str:
+        return (self.ui_language or self.language).value
 
 
 class AgentRule(BaseModel):
@@ -131,6 +143,12 @@ class ContextConfig(BaseModel):
     compress_at_token_pct: int = Field(70, ge=50, le=90)
 
 
+class ArtifactsConfig(BaseModel):
+    mode: str = Field("auto", pattern="^(auto|generate|patch)$")
+    max_patch_chars: int = Field(24000, ge=4000, le=100000)
+    patch_fallback_generate: bool = False
+
+
 class MonitoringConfig(BaseModel):
     enabled: bool = True
     interval_sec: int = Field(3, ge=1, le=60)
@@ -140,11 +158,19 @@ class MonitoringConfig(BaseModel):
     show_per_core: bool = False
 
 
+class HitlConfig(BaseModel):
+    enabled: bool = True
+    intake_before_start: bool = True
+    max_intake_questions: int = Field(8, ge=0, le=20)
+
+
 class ResilienceConfig(BaseModel):
     agent_timeout_sec: int = Field(600, ge=30, le=3600)
     stuck_detection_sec: int = Field(300, ge=30, le=1800)
     hitl_timeout_sec: int = Field(3600, ge=60)
     max_review_cycles: int = Field(10, ge=1, le=50)
+    patch_unchanged_limit: int = Field(2, ge=1, le=10)
+    review_plateau_window: int = Field(3, ge=2, le=10)
     circuit_breaker_failures: int = Field(3, ge=1, le=10)
     circuit_breaker_cooldown_sec: int = Field(60, ge=10, le=600)
     checkpoint_every_agent: bool = True
@@ -167,8 +193,10 @@ class Rules(BaseModel):
     hf: HFConfig | None = None
     rag: RAGConfig = Field(default_factory=RAGConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
     resilience: ResilienceConfig = Field(default_factory=ResilienceConfig)
+    hitl: HitlConfig = Field(default_factory=HitlConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
     @model_validator(mode="after")
@@ -209,6 +237,10 @@ class AnswerRequest(BaseModel):
     answer: Any
 
 
+class BatchAnswersRequest(BaseModel):
+    answers: dict[str, Any] = Field(..., min_length=1)
+
+
 class RecoverRequest(BaseModel):
     action: str = Field(
         ...,
@@ -231,5 +263,5 @@ class SessionControlRequest(BaseModel):
     until_confident: bool | None = None
     action: str | None = Field(
         None,
-        pattern="^(replan_pipeline|retry_tasks|retry_reviewer|force_export)$",
+        pattern="^(replan_pipeline|retry_tasks|retry_reviewer|force_export|pause|resume|cancel)$",
     )

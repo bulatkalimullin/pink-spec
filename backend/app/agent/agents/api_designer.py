@@ -6,7 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
-from app.services.artifact_store import read_artifact_slice, save_artifact
+from app.services.artifact_store import read_artifact_slice
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior API Designer. Design a comprehensive API specification based on the architecture.
@@ -48,7 +48,19 @@ class APIDesignerAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Designing API contracts and data models...")
-        output = await self._generate(state, messages)
+        api_placeholder, api_mode, api_output, api_assumptions = await self._write_spec_artifact(
+            state,
+            "api_spec",
+            generate_messages=messages,
+            artifact_label="API Specification",
+        )
+        data_placeholder, data_mode, data_output, data_assumptions = await self._write_spec_artifact(
+            state,
+            "data_model",
+            generate_messages=messages,
+            artifact_label="Data Model",
+        )
+        output = data_output if data_mode != "unchanged" else api_output
 
         await log_bus.emit(
             session_id,
@@ -56,6 +68,7 @@ class APIDesignerAgent(BaseAgent):
             {
                 "artifact_type": "api_spec",
                 "chunk": output[:500],
+                "mode": api_mode,
             },
         )
 
@@ -70,8 +83,6 @@ class APIDesignerAgent(BaseAgent):
 
         run_id = self._run_id(state)
         new_outputs = {**state.get("agent_outputs", {}), run_id: output[:200]}
-        api_placeholder = await save_artifact(session_id, "api_spec", output)
-        data_placeholder = await save_artifact(session_id, "data_model", output)
         new_artifacts = {
             **state.get("artifacts", {}),
             "api_spec": api_placeholder,

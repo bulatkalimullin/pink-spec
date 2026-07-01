@@ -6,7 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
-from app.services.artifact_store import read_artifact_slice, save_artifact
+from app.services.artifact_store import read_artifact_slice
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior UI/UX Designer and Frontend Architect. Design the complete UI specification.
@@ -54,7 +54,12 @@ class UIDesignerAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Designing UI screens and user flows...")
-        output = await self._generate(state, messages)
+        placeholder, mode, output, new_assumptions = await self._write_spec_artifact(
+            state,
+            "ui_spec",
+            generate_messages=messages,
+            artifact_label="UI Specification",
+        )
 
         await log_bus.emit(
             session_id,
@@ -62,6 +67,7 @@ class UIDesignerAgent(BaseAgent):
             {
                 "artifact_type": "ui_spec",
                 "chunk": output[:500],
+                "mode": mode,
             },
         )
 
@@ -75,7 +81,6 @@ class UIDesignerAgent(BaseAgent):
                 )
 
         new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output[:200]}
-        placeholder = await save_artifact(session_id, "ui_spec", output)
         new_artifacts = {**state.get("artifacts", {}), "ui_spec": placeholder}
 
         return {

@@ -17,6 +17,7 @@ from app.services.artifact_store import (
     summarize_artifacts,
 )
 from app.services.export import write_task_roadmap
+from app.services.artifact_quality import stack_constraint_prompt
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior engineering lead. Decompose the project specifications into atomic implementation tasks.
@@ -97,13 +98,15 @@ class TaskDecomposerAgent(BaseAgent):
             )
 
         focus_line = f"\n\nFOCUS (only these tasks): {prompt_focus}" if prompt_focus else ""
+        stack_line = stack_constraint_prompt(rules)
+        stack_block = f"\n\nSTACK CONSTRAINTS:\n{stack_line}" if stack_line else ""
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": (
-                    f"Generate approximately {target_count} tasks for:{focus_line}\n\n"
+                    f"Generate approximately {target_count} tasks for:{focus_line}{stack_block}\n\n"
                     f"Product:\n{product_spec}\n\n"
                     f"Architecture:\n{architecture_spec}\n\n"
                     f"API:\n{api_spec}\n\n"

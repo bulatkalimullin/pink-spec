@@ -6,7 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
-from app.services.artifact_store import read_artifact_slice, save_artifact
+from app.services.artifact_store import read_artifact_slice
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior Product Analyst. Given a project idea and constraints, produce a comprehensive product specification.
@@ -63,7 +63,12 @@ class ProductAnalystAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Generating product specification...")
-        output = await self._generate(state, messages)
+        placeholder, mode, output, new_assumptions = await self._write_spec_artifact(
+            state,
+            "product_spec",
+            generate_messages=messages,
+            artifact_label="Product Specification",
+        )
 
         await log_bus.emit(
             session_id,
@@ -71,6 +76,7 @@ class ProductAnalystAgent(BaseAgent):
             {
                 "artifact_type": "product_spec",
                 "chunk": output[:500],
+                "mode": mode,
             },
         )
 
@@ -85,7 +91,6 @@ class ProductAnalystAgent(BaseAgent):
                 )
 
         new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output[:200]}
-        placeholder = await save_artifact(session_id, "product_spec", output)
         new_artifacts = {**state.get("artifacts", {}), "product_spec": placeholder}
 
         return {

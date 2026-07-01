@@ -6,7 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
-from app.services.artifact_store import read_artifact_slice, save_artifact
+from app.services.artifact_store import read_artifact_slice
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a Staff Software Architect. Based on the product specification, design the system architecture.
@@ -63,7 +63,12 @@ class ArchitectAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Designing architecture...")
-        output = await self._generate(state, messages)
+        placeholder, mode, output, new_assumptions = await self._write_spec_artifact(
+            state,
+            "architecture_spec",
+            generate_messages=messages,
+            artifact_label="Architecture Specification",
+        )
 
         await log_bus.emit(
             session_id,
@@ -71,6 +76,7 @@ class ArchitectAgent(BaseAgent):
             {
                 "artifact_type": "architecture_spec",
                 "chunk": output[:500],
+                "mode": mode,
             },
         )
 
@@ -84,7 +90,6 @@ class ArchitectAgent(BaseAgent):
                 )
 
         new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output[:200]}
-        placeholder = await save_artifact(session_id, "architecture_spec", output)
         new_artifacts = {**state.get("artifacts", {}), "architecture_spec": placeholder}
 
         return {
