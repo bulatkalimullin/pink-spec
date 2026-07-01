@@ -83,7 +83,7 @@ class ProductAnalystAgent(BaseAgent):
                     session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
                 )
 
-        new_outputs = {**state.get("agent_outputs", {}), "product_analyst": output}
+        new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output}
         new_artifacts = {**state.get("artifacts", {}), "product_spec": output}
 
         return {
@@ -92,4 +92,5 @@ class ProductAnalystAgent(BaseAgent):
             "artifacts": new_artifacts,
             "assumptions": assumptions,
             "current_agent": "supervisor",
+            "current_step": None,
         }

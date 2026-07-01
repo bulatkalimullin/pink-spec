@@ -73,10 +73,24 @@ def initial_state(
 ) -> MultiAgentState:
     import time
 
+    rules = dict(rules)
     spec_level = rules.get("spec_level", "L2")
     safety_cap = rules.get("l4", {}).get("safety_cap_sec", 7200)
-    pipeline_cfg = rules.get("pipeline", {}) or {}
+    pipeline_cfg = dict(rules.get("pipeline", {}) or {})
     mode = pipeline_cfg.get("mode", "auto")
+
+    if spec_level == "L4":
+        mode = "auto"
+        pipeline_cfg["mode"] = "auto"
+        if pipeline_cfg.get("min_steps") is None:
+            pipeline_cfg["min_steps"] = 12
+        if pipeline_cfg.get("min_deliverables") is None:
+            pipeline_cfg["min_deliverables"] = 8
+        ollama = dict(rules.get("ollama", {}) or {})
+        if ollama.get("max_tokens", 4096) < 8192:
+            ollama["max_tokens"] = 8192
+        rules["ollama"] = ollama
+        rules["pipeline"] = pipeline_cfg
 
     if mode == "fixed":
         from app.agent.pipeline_utils import legacy_sequence_to_steps

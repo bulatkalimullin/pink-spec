@@ -35,7 +35,7 @@ async def get_spec_levels():
                 "id": "L4",
                 "name": "Exhaustive",
                 "time": "Until approved",
-                "description": "Deep-dive, iterative refinement",
+                "description": "Dynamic pipeline, 100+ tasks, iterative review",
             },
         ]
     }

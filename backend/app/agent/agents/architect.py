@@ -82,7 +82,7 @@ class ArchitectAgent(BaseAgent):
                     session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
                 )
 
-        new_outputs = {**state.get("agent_outputs", {}), "architect": output}
+        new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output}
         new_artifacts = {**state.get("artifacts", {}), "architecture_spec": output}
 
         return {
@@ -91,4 +91,5 @@ class ArchitectAgent(BaseAgent):
             "artifacts": new_artifacts,
             "assumptions": assumptions,
             "current_agent": "supervisor",
+            "current_step": None,
         }

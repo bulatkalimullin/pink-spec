@@ -16,6 +16,7 @@ class PipelineStep(BaseModel):
     prompt_focus: str | None = None
     target_count: int | None = None
     description: str = ""
+    executor_agent: str | None = None
 
 
 class DeliverableSpec(BaseModel):
@@ -32,6 +33,8 @@ class PipelineConfig(BaseModel):
     mode: Literal["auto", "fixed"] = "auto"
     deliverables: list[DeliverableSpec] = Field(default_factory=list)
     include_tasks: bool | None = None
+    min_steps: int | None = Field(None, ge=1, le=50)
+    min_deliverables: int | None = Field(None, ge=0, le=30)
 
 
 def step_to_dict(step: PipelineStep | dict[str, Any]) -> dict[str, Any]:

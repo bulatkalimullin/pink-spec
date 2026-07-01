@@ -67,7 +67,8 @@ class APIDesignerAgent(BaseAgent):
                     session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
                 )
 
-        new_outputs = {**state.get("agent_outputs", {}), "api_designer": output}
+        run_id = self._run_id(state)
+        new_outputs = {**state.get("agent_outputs", {}), run_id: output}
         new_artifacts = {
             **state.get("artifacts", {}),
             "api_spec": output,
@@ -80,4 +81,5 @@ class APIDesignerAgent(BaseAgent):
             "artifacts": new_artifacts,
             "assumptions": assumptions,
             "current_agent": "supervisor",
+            "current_step": None,
         }

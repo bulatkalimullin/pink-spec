@@ -9,7 +9,7 @@ from typing import Any
 import structlog
 
 from app.agent.state import MultiAgentState, initial_state
-from app.agent.supervisor import supervisor_node
+from app.agent.supervisor import handle_l4_post_review, supervisor_node
 from app.services.export import (
     artifact_manifest_path,
     write_artifact,
@@ -264,6 +264,7 @@ async def run_graph(
 
             try:
                 prev_errors = len(state.get("errors", []))
+                prev_review_count = len(state.get("review_reports", []))
                 state = {
                     **state,
                     **await asyncio.wait_for(
@@ -285,6 +286,16 @@ async def run_graph(
                         )
                 else:
                     cb.record_success()
+
+                # L4 post-review gate (runs after reviewer completes)
+                if (
+                    spec_level == "L4"
+                    and len(state.get("review_reports", [])) > prev_review_count
+                ):
+                    l4_update = await handle_l4_post_review(state)
+                    state = {**state, **l4_update}
+                    if state.get("current_agent") == "export":
+                        break
             except TimeoutError:
                 cb.record_failure()
                 await log_bus.emit(

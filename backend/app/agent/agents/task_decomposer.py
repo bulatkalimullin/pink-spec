@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
-from app.agent.pipeline_utils import TASK_COUNT_BY_LEVEL
+from app.agent.pipeline_utils import TASK_COUNT_BY_LEVEL, merge_tasks
 from app.agent.state import MultiAgentState
 from app.services.export import write_task_roadmap
 from app.services.log_bus import log_bus
@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """You are a senior engineering lead. Decompose the project spec
 Each task must take 15–60 minutes to complete. Output a JSON array of task objects.
 
 Each task object must have:
-- id: "NNN" (zero-padded, sequential)
+- id: "NNN" (zero-padded, sequential within this batch)
 - phase: "XX-phase-name"
 - title: "short imperative verb phrase"
 - priority: "high" | "medium" | "low"
@@ -49,9 +49,14 @@ class TaskDecomposerAgent(BaseAgent):
         spec_level = state["spec_level"]
         rules = state["rules"]
         step = state.get("current_step") or {}
+        l4_cfg = rules.get("l4", {}) or {}
 
-        target_count = step.get("target_count") or TASK_COUNT_BY_LEVEL.get(spec_level, 20)
+        default_target = TASK_COUNT_BY_LEVEL.get(spec_level, 20)
+        if spec_level == "L4":
+            default_target = l4_cfg.get("tasks_per_batch", 25)
+        target_count = step.get("target_count") or default_target
         run_id = step.get("id", self.agent_id)
+        prompt_focus = step.get("prompt_focus", "")
 
         if target_count == 0:
             await self._log(session_id, "info", "Task decomposition skipped for this level")
@@ -73,29 +78,43 @@ class TaskDecomposerAgent(BaseAgent):
             if k not in ("product_spec", "architecture_spec", "api_spec", "ui_spec") and v
         )
         output_lang = rules.get("output", {}).get("language", "en")
+        existing_tasks = state.get("tasks", [])
+        existing_summary = ""
+        if existing_tasks:
+            existing_summary = (
+                f"\n\nAlready generated {len(existing_tasks)} tasks. "
+                "Do NOT duplicate them. Generate only NEW tasks for your focus area."
+            )
+
+        focus_line = f"\n\nFOCUS (only these tasks): {prompt_focus}" if prompt_focus else ""
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": (
-                    f"Generate approximately {target_count} tasks for:\n\n"
+                    f"Generate approximately {target_count} tasks for:{focus_line}\n\n"
                     f"Product:\n{product_spec[:1500]}\n\n"
                     f"Architecture:\n{architecture_spec[:1500]}\n\n"
                     f"API:\n{api_spec[:800]}\n\n"
                     f"UI:\n{ui_spec[:800]}\n\n"
-                    f"Additional specs:\n{extra_specs[:2000]}\n\n"
+                    f"Additional specs:\n{extra_specs[:2000]}\n"
+                    f"{existing_summary}\n\n"
                     f"Use spec_refs paths like docs/product_spec.md#section-name\n"
                     f"Output language for human-readable fields: {output_lang}"
                 ),
             },
         ]
 
-        await self._log(session_id, "info", f"Decomposing into ~{target_count} micro-tasks...")
+        await self._log(
+            session_id,
+            "info",
+            f"Decomposing into ~{target_count} micro-tasks ({run_id})...",
+        )
         raw = await self._llm.generate(messages)
-        tasks = _parse_tasks(raw)
+        new_batch = _parse_tasks(raw)
 
-        if not tasks:
+        if not new_batch:
             await self._log(session_id, "warn", "Invalid JSON — retrying with repair prompt")
             repair_messages = messages + [
                 {"role": "assistant", "content": raw[:4000]},
@@ -105,31 +124,46 @@ class TaskDecomposerAgent(BaseAgent):
                 },
             ]
             raw = await self._llm.generate(repair_messages)
-            tasks = _parse_tasks(raw)
+            new_batch = _parse_tasks(raw)
 
-        if not tasks:
+        if not new_batch:
             await self._log(session_id, "warn", "Task decomposer returned empty/invalid JSON")
-            tasks = []
+            new_batch = []
         else:
-            tasks = _normalize_spec_refs(tasks)
+            new_batch = _normalize_spec_refs(new_batch)
+
+        tasks = merge_tasks(existing_tasks, new_batch)
 
         phases: dict[str, int] = {}
-        for t in tasks:
+        for t in new_batch:
             phase = t.get("phase", "00-unknown")
             phases[phase] = phases.get(phase, 0) + 1
 
         for phase, count in phases.items():
             await log_bus.emit(session_id, "task_batch_generated", {"phase": phase, "count": count})
 
-        await self._log(session_id, "info", f"Generated {len(tasks)} tasks in {len(phases)} phases")
+        await self._log(
+            session_id,
+            "info",
+            f"Batch {run_id}: +{len(new_batch)} tasks (total {len(tasks)})",
+        )
 
-        roadmap_md = ""
-        if tasks:
+        pipeline = state.get("pipeline") or []
+        task_steps = [
+            s["id"]
+            for s in pipeline
+            if s.get("executor") == "builtin:task_decomposer"
+            or s.get("executor_agent") == "task_decomposer"
+        ]
+        is_last_batch = run_id == task_steps[-1] if task_steps else True
+
+        roadmap_md = state.get("artifacts", {}).get("TASK_ROADMAP", "")
+        if tasks and is_last_batch:
             try:
                 roadmap_md = await self._llm.generate(
                     [
                         {"role": "system", "content": ROADMAP_PROMPT},
-                        {"role": "user", "content": json.dumps(tasks[:30], indent=2)[:6000]},
+                        {"role": "user", "content": json.dumps(tasks[:50], indent=2)[:8000]},
                     ]
                 )
                 write_task_roadmap(session_id, roadmap_md)
@@ -138,12 +172,15 @@ class TaskDecomposerAgent(BaseAgent):
                 write_task_roadmap(session_id, roadmap_md)
 
         new_artifacts = dict(artifacts)
-        if roadmap_md:
+        if roadmap_md and is_last_batch:
             new_artifacts["TASK_ROADMAP"] = roadmap_md
 
         return {
             **state,
-            "agent_outputs": {**state.get("agent_outputs", {}), run_id: f"{len(tasks)} tasks"},
+            "agent_outputs": {
+                **state.get("agent_outputs", {}),
+                run_id: f"{len(new_batch)} new, {len(tasks)} total",
+            },
             "artifacts": new_artifacts,
             "tasks": tasks,
             "current_agent": "supervisor",

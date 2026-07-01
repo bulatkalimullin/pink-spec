@@ -43,6 +43,9 @@ class L4Config(BaseModel):
     safety_cap_sec: int = Field(7200, ge=300, le=14400)
     completion_confidence: float = Field(0.85, ge=0.5, le=1.0)
     tasks_coverage_pct: float = Field(95.0, ge=50.0, le=100.0)
+    min_tasks: int = Field(100, ge=10, le=500)
+    tasks_per_batch: int = Field(25, ge=5, le=50)
+    max_task_batches: int = Field(8, ge=1, le=20)
 
 
 class ProjectConfig(BaseModel):
@@ -171,6 +174,17 @@ class Rules(BaseModel):
     def validate_l4_cap(self) -> Rules:
         if self.spec_level == SpecLevel.L4 and self.l4.safety_cap_sec > 14400:
             raise ValueError("L4 safety_cap_sec cannot exceed 4 hours (14400s)")
+        return self
+
+    @model_validator(mode="after")
+    def apply_l4_defaults(self) -> Rules:
+        if self.spec_level == SpecLevel.L4:
+            if self.pipeline.min_steps is None:
+                self.pipeline.min_steps = 12
+            if self.pipeline.min_deliverables is None:
+                self.pipeline.min_deliverables = 8
+            if self.ollama.max_tokens < 8192:
+                self.ollama.max_tokens = 8192
         return self
 
     def get_time_budget(self) -> int | None:

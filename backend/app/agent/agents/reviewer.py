@@ -105,7 +105,8 @@ class ReviewerAgent(BaseAgent):
             },
         )
 
-        new_outputs = {**state.get("agent_outputs", {}), "reviewer": json.dumps(report)}
+        run_id = self._run_id(state)
+        new_outputs = {**state.get("agent_outputs", {}), run_id: json.dumps(report)}
 
         return {
             **state,
@@ -113,6 +114,7 @@ class ReviewerAgent(BaseAgent):
             "review_reports": review_reports,
             "review_cycles": new_cycles,
             "current_agent": "supervisor",
+            "current_step": None,
         }
 
 

@@ -67,11 +67,13 @@ class ContextManagerAgent(BaseAgent):
             },
         )
 
-        new_outputs = {**state.get("agent_outputs", {}), "context_manager": "done"}
+        run_id = self._run_id(state)
+        new_outputs = {**state.get("agent_outputs", {}), run_id: "done"}
 
         return {
             **state,
             "agent_outputs": new_outputs,
             "context": new_context,
             "current_agent": "supervisor",
+            "current_step": None,
         }

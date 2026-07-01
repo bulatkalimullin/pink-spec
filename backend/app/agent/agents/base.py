@@ -134,3 +134,7 @@ class BaseAgent:
             },
         )
         return assumption
+
+    def _run_id(self, state: MultiAgentState) -> str:
+        step = state.get("current_step") or {}
+        return step.get("id") or self.agent_id
