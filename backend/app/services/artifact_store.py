@@ -20,6 +20,7 @@ from app.services.export import (
     write_task,
     write_task_index,
 )
+from app.services.artifact_patcher import PatchResult, apply_patches, parse_patch_blocks, validate_patch_result
 from app.services.session import save_manifest
 
 logger = structlog.get_logger(__name__)
@@ -104,6 +105,99 @@ async def save_artifact(session_id: str, artifact_type: str, content: str) -> st
         artifacts={artifact_type: artifact_manifest_path(artifact_type)},
     )
     return placeholder_for(len(content))
+
+
+def _backup_artifact_sync(session_id: str, artifact_type: str) -> None:
+    path = resolve_artifact_path(session_id, artifact_type)
+    if path and path.is_file():
+        backup = path.with_suffix(path.suffix + ".bak")
+        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def _apply_patches_sync(
+    session_id: str, artifact_type: str, original: str, patches_raw: str
+) -> tuple[str, PatchResult]:
+    ops = parse_patch_blocks(patches_raw)
+    if not ops:
+        return original, PatchResult(failed=1, errors=["no valid SEARCH/REPLACE blocks"])
+    patched, result = apply_patches(original, ops)
+    if result.applied == 0 or not validate_patch_result(original, patched):
+        return original, result
+    _backup_artifact_sync(session_id, artifact_type)
+    write_artifact(session_id, artifact_type, patched)
+    return patched, result
+
+
+async def save_artifact_patched(
+    session_id: str,
+    artifact_type: str,
+    patches_raw: str,
+    *,
+    original_content: str | None = None,
+) -> tuple[str, PatchResult, str]:
+    """
+    Apply SEARCH/REPLACE patches to an existing artifact.
+    Returns (placeholder, patch_result, mode) where mode is 'patch' or 'unchanged'.
+    """
+    from app.services.log_bus import log_bus
+
+    original = original_content
+    if original is None:
+        original = await asyncio.to_thread(read_artifact, session_id, artifact_type)
+
+    patched, result = await asyncio.to_thread(
+        _apply_patches_sync, session_id, artifact_type, original, patches_raw
+    )
+
+    if patched == original:
+        await log_bus.emit(
+            session_id,
+            "artifact_patched",
+            {
+                "artifact_type": artifact_type,
+                "mode": "unchanged",
+                "patches_applied": 0,
+                "patches_failed": result.failed,
+                "lines_added": 0,
+                "lines_removed": 0,
+            },
+        )
+        return placeholder_for(len(original)), result, "unchanged"
+
+    await patch_manifest(
+        session_id,
+        artifacts={artifact_type: artifact_manifest_path(artifact_type)},
+    )
+    await log_bus.emit(
+        session_id,
+        "artifact_patched",
+        {
+            "artifact_type": artifact_type,
+            "mode": "patch",
+            "patches_applied": result.applied,
+            "patches_failed": result.failed,
+            "lines_added": result.lines_added,
+            "lines_removed": result.lines_removed,
+        },
+    )
+    return placeholder_for(len(patched)), result, "patch"
+
+
+async def emit_artifact_generated(session_id: str, artifact_type: str, content: str) -> None:
+    from app.services.log_bus import log_bus
+
+    await log_bus.emit(
+        session_id,
+        "artifact_patched",
+        {
+            "artifact_type": artifact_type,
+            "mode": "generate",
+            "patches_applied": 0,
+            "patches_failed": 0,
+            "lines_added": content.count("\n") + (1 if content else 0),
+            "lines_removed": 0,
+        },
+    )
 
 
 def read_artifact(session_id: str, artifact_type: str) -> str:
@@ -210,6 +304,10 @@ def _task_rel_path(task: dict[str, Any]) -> str:
 
 def _save_tasks_sync(session_id: str, tasks: list[dict[str, Any]]) -> None:
     """Write task files; incremental when only appending (same ids at start)."""
+    from app.services.artifact_quality import deduplicate_tasks, resolve_spec_refs
+
+    tasks = deduplicate_tasks(tasks)
+    tasks = resolve_spec_refs(tasks, session_id)
     tasks_dir = session_output_dir(session_id) / "tasks"
     old_tasks = load_tasks_full(session_id)
     old_rels = {_task_rel_path(t) for t in old_tasks}

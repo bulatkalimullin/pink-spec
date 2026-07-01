@@ -92,6 +92,8 @@ class Settings(BaseSettings):
             "stuck_detection_sec": self.stuck_detection_sec,
             "hitl_timeout_sec": self.hitl_timeout_sec,
             "max_review_cycles": 10,
+            "patch_unchanged_limit": 2,
+            "review_plateau_window": 3,
             "circuit_breaker_failures": 3,
             "circuit_breaker_cooldown_sec": 60,
             "checkpoint_every_agent": True,

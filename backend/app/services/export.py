@@ -22,7 +22,10 @@ ARTIFACT_EXT_MAP = {
 
 
 def session_output_dir(session_id: str) -> Path:
-    path = OUTPUT_ROOT / session_id
+    from app.services.output_paths import get_output_slug
+
+    slug = get_output_slug(session_id)
+    path = OUTPUT_ROOT / slug
     path.mkdir(parents=True, exist_ok=True)
     return path
 

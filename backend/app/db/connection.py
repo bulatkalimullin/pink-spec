@@ -78,8 +78,7 @@ async def init_db() -> None:
                 completed_at TEXT NOT NULL,
                 duration_sec REAL NOT NULL,
                 quality_score REAL NOT NULL,
-                metrics_json TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                metrics_json TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_session_metrics_completed
@@ -92,9 +91,53 @@ async def init_db() -> None:
             );
         """)
         await db.commit()
-        # Migration: add pipeline_json column if missing
+        await _run_migrations(db)
+
+
+async def _run_migrations(db: aiosqlite.Connection) -> None:
+    """Incremental schema migrations."""
+    for col, typ in (
+        ("pipeline_json", "TEXT"),
+        ("output_slug", "TEXT"),
+        ("project_name", "TEXT"),
+        ("deleted_at", "TEXT"),
+    ):
         try:
-            await db.execute("ALTER TABLE sessions ADD COLUMN pipeline_json TEXT")
+            await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {typ}")
             await db.commit()
         except Exception:
             pass
+
+    cursor = await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='session_metrics'"
+    )
+    row = await cursor.fetchone()
+    if row and row[0] and "FOREIGN KEY" in row[0]:
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS session_metrics_new (
+                session_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                spec_level TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                duration_sec REAL NOT NULL,
+                quality_score REAL NOT NULL,
+                metrics_json TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO session_metrics_new
+                SELECT session_id, status, spec_level, completed_at, duration_sec,
+                       quality_score, metrics_json FROM session_metrics;
+            DROP TABLE session_metrics;
+            ALTER TABLE session_metrics_new RENAME TO session_metrics;
+            CREATE INDEX IF NOT EXISTS idx_session_metrics_completed
+                ON session_metrics (completed_at DESC);
+        """)
+        await db.commit()
+
+    try:
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_output_slug "
+            "ON sessions(output_slug) WHERE output_slug IS NOT NULL AND deleted_at IS NULL"
+        )
+        await db.commit()
+    except Exception:
+        pass

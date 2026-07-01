@@ -18,15 +18,51 @@ def _now() -> str:
 
 
 async def create_session(spec_level: str, idea: str, rules: dict) -> str:
+    from app.services.output_paths import (
+        allocate_output_slug,
+        output_root,
+        register_output_slug,
+        resolve_project_name,
+    )
+
     session_id = str(uuid4())
+    project_name = resolve_project_name(idea, rules)
+    output_slug = await allocate_output_slug(project_name)
+
+    rules = dict(rules)
+    project = dict(rules.get("project") or {})
+    project["name"] = project_name
+    rules["project"] = project
+
     async with get_db() as db:
         await db.execute(
-            "INSERT INTO sessions (id, status, spec_level, idea, rules_json, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (session_id, "pending", spec_level, idea, json.dumps(rules), _now(), _now()),
+            "INSERT INTO sessions "
+            "(id, status, spec_level, idea, rules_json, output_slug, project_name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                "pending",
+                spec_level,
+                idea,
+                json.dumps(rules),
+                output_slug,
+                project_name,
+                _now(),
+                _now(),
+            ),
         )
         await db.commit()
-    logger.info("session_created", session_id=session_id, spec_level=spec_level)
+
+    register_output_slug(session_id, output_slug)
+    (output_root() / output_slug).mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "session_created",
+        session_id=session_id,
+        spec_level=spec_level,
+        output_slug=output_slug,
+        project_name=project_name,
+    )
     return session_id
 
 
@@ -122,6 +158,49 @@ async def answer_question(session_id: str, question_id: str, answer) -> None:
             "UPDATE open_questions SET answer_json = ?, answered_at = ? WHERE id = ? AND session_id = ?",
             (json.dumps(answer), _now(), question_id, session_id),
         )
+        await db.commit()
+
+
+async def list_active_sessions(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    include_archived: bool = False,
+) -> tuple[list[dict], int]:
+    async with get_db() as db:
+        where = "" if include_archived else "WHERE deleted_at IS NULL"
+        count_cursor = await db.execute(f"SELECT COUNT(*) FROM sessions {where}")
+        total = (await count_cursor.fetchone())[0]
+        cursor = await db.execute(
+            f"SELECT * FROM sessions {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        rows = await cursor.fetchall()
+
+    sessions = []
+    for row in rows:
+        d = dict(row)
+        d["rules"] = json.loads(d.pop("rules_json"))
+        d.pop("manifest_json", None)
+        d.pop("pipeline_json", None)
+        sessions.append(d)
+    return sessions, total
+
+
+async def soft_delete_session(session_id: str) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE sessions SET status = 'archived', deleted_at = ?, updated_at = ? WHERE id = ?",
+            (_now(), _now(), session_id),
+        )
+        await db.commit()
+
+
+async def purge_session_operational_data(session_id: str) -> None:
+    async with get_db() as db:
+        await db.execute("DELETE FROM session_logs WHERE session_id = ?", (session_id,))
+        await db.execute("DELETE FROM session_checkpoints WHERE session_id = ?", (session_id,))
+        await db.execute("DELETE FROM open_questions WHERE session_id = ?", (session_id,))
         await db.commit()
 
 
