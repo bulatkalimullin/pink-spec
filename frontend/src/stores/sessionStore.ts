@@ -116,13 +116,14 @@ interface SessionStore {
   stuckReason: string | null;
   lastEventAt: number;
   circuitBreakers: Record<string, boolean>;
+  intakeSummary: string | null;
 
   // Dynamic pipeline
   pipeline: PipelineStep[];
   pipelineReasoning: string;
 
   // Actions
-  setSessionId: (id: string, level: string, idea: string) => void;
+  setSessionId: (id: string, level: string, idea: string, status?: string) => void;
   setPipeline: (steps: PipelineStep[], reasoning?: string) => void;
   setWsStatus: (s: SessionStore["wsStatus"]) => void;
   pushLog: (entry: LogEntry) => void;
@@ -145,6 +146,7 @@ const AGENT_NAMES: Record<string, string> = {
   context_manager: "Context Manager",
   supervisor: "Supervisor",
   pipeline_planner: "Pipeline Planner",
+  intake: "Intake",
   export: "Export",
 };
 
@@ -172,11 +174,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   stuckReason: null,
   lastEventAt: Date.now(),
   circuitBreakers: {},
+  intakeSummary: null,
   pipeline: LEGACY_PIPELINE,
   pipelineReasoning: "",
 
-  setSessionId: (id, level, idea) =>
-    set({ sessionId: id, specLevel: level, idea, sessionStatus: "running" }),
+  setSessionId: (id, level, idea, status = "running") =>
+    set({ sessionId: id, specLevel: level, idea, sessionStatus: status }),
 
   setPipeline: (steps, reasoning = "") =>
     set({
@@ -316,6 +319,30 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         break;
       }
 
+      case "artifact_patched": {
+        const p = payload as {
+          artifact_type: string;
+          mode: string;
+          patches_applied?: number;
+          lines_added?: number;
+          lines_removed?: number;
+        };
+        const modeLabel =
+          p.mode === "patch"
+            ? `Patched ${p.artifact_type}: +${p.lines_added ?? 0}/-${p.lines_removed ?? 0} lines`
+            : p.mode === "generate"
+              ? `Generated ${p.artifact_type}`
+              : `Unchanged ${p.artifact_type}`;
+        get().pushLog({
+          seq: envelope.seq,
+          type: "artifact_patched",
+          ts: ts ?? new Date().toISOString(),
+          session_id: envelope.session_id,
+          payload: { ...p, message: modeLabel },
+        });
+        break;
+      }
+
       case "fallback_triggered": {
         const p = payload as { layer: string; step: string; message: string; from?: string; to?: string };
         set((s) => ({
@@ -371,6 +398,28 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         set({ reviewCycles: p.cycle });
         break;
       }
+
+      case "intake_started": {
+        const p = payload as { summary?: string; questions_count?: number };
+        set({
+          sessionStatus: "waiting_user",
+          intakeSummary: p.summary ?? null,
+        });
+        break;
+      }
+
+      case "intake_waiting": {
+        set({ sessionStatus: "waiting_user" });
+        break;
+      }
+
+      case "intake_complete": {
+        set({ sessionStatus: "running", intakeSummary: null });
+        break;
+      }
+
+      case "question_asked":
+        break;
 
       case "refinement_settings": {
         break;
@@ -436,6 +485,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       stuckReason: null,
       lastEventAt: Date.now(),
       circuitBreakers: {},
+      intakeSummary: null,
       pipeline: LEGACY_PIPELINE,
       pipelineReasoning: "",
     }),

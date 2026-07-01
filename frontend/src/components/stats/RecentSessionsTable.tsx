@@ -36,6 +36,7 @@ export default function RecentSessionsTable({ sessions }: RecentSessionsTablePro
       <table className="w-full text-left text-xs">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
+            <th className="pb-2 pr-3 font-medium">Проект</th>
             <th className="pb-2 pr-3 font-medium">ID</th>
             <th className="pb-2 pr-3 font-medium">Уровень</th>
             <th className="pb-2 pr-3 font-medium">Статус</th>
@@ -48,6 +49,9 @@ export default function RecentSessionsTable({ sessions }: RecentSessionsTablePro
         <tbody>
           {sessions.map((s) => (
             <tr key={s.session_id} className="border-b border-border/50 hover:bg-accent/30">
+              <td className="py-2 pr-3 text-foreground max-w-[140px] truncate">
+                {s.project_name || "—"}
+              </td>
               <td className="py-2 pr-3">
                 <Link
                   to={`/workspace/${s.session_id}`}

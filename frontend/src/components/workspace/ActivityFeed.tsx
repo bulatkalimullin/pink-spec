@@ -40,6 +40,7 @@ const TYPE_META: Record<string, { icon: React.ReactNode; label: string; badge?: 
   recovery_started: { icon: <RotateCcw className="h-3 w-3" />, label: "Recovery", badge: "RECOVER" },
   checkpoint_saved: { icon: <CheckCircle className="h-3 w-3" />, label: "Checkpoint", badge: "CKPT" },
   artifact_preview: { icon: <FileText className="h-3 w-3" />, label: "Artifact" },
+  artifact_patched: { icon: <FileText className="h-3 w-3" />, label: "Artifact", badge: "PATCH" },
   done: { icon: <CheckCircle className="h-3 w-3" />, label: "Done", badge: "DONE" },
   stage_changed: { icon: <Loader2 className="h-3 w-3" />, label: "Этап", badge: "STAGE" },
   saturation_progress: { icon: <Search className="h-3 w-3" />, label: "Контекст", badge: "RAG" },
@@ -71,6 +72,7 @@ function getEntryMessage(entry: LogEntry): string {
     case "recovery_started": return `Recovery: ${p?.action} on ${p?.target_agent ?? "session"}`;
     case "checkpoint_saved": return `Checkpoint saved: ${p?.checkpoint_id}`;
     case "artifact_preview": return `${p?.artifact_type} preview…`;
+    case "artifact_patched": return (p?.message as string) ?? `${p?.artifact_type} ${p?.mode}`;
     case "done": return `Complete! ${p?.artifacts_count} artifacts, ${p?.tasks_count} tasks`;
     case "stage_changed": {
       const detail = p?.detail ? ` — ${p.detail}` : "";

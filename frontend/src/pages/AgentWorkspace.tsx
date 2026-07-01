@@ -11,7 +11,7 @@ import SessionProgressBar from "@/components/workspace/SessionProgressBar";
 import ActivityFeed from "@/components/workspace/ActivityFeed";
 import AgentTimeline from "@/components/workspace/AgentTimeline";
 import SupervisorCard from "@/components/workspace/SupervisorCard";
-import RefinementPanel from "@/components/workspace/RefinementPanel";
+import AgentControlPanel from "@/components/workspace/AgentControlPanel";
 import RecoveryPanel from "@/components/workspace/RecoveryPanel";
 import SystemMetricsPanel from "@/components/metrics/SystemMetricsPanel";
 import AssumptionsPanel from "@/components/observability/AssumptionsPanel";
@@ -83,7 +83,7 @@ export default function AgentWorkspace() {
     if (!sessionId) return;
     getSession(sessionId)
       .then((s) => {
-        setSessionId(sessionId, s.spec_level, s.idea ?? "");
+        setSessionId(sessionId, s.spec_level, s.idea ?? "", s.status ?? "running");
         setQuestionCount((s.open_questions ?? []).length);
         const pl = s.pipeline as { steps?: { id: string; name: string }[]; reasoning?: string } | null;
         if (pl?.steps?.length) {
@@ -96,6 +96,16 @@ export default function AgentWorkspace() {
         navigate("/");
       });
   }, [sessionId, setSessionId, setPipeline, navigate]);
+
+  useEffect(() => {
+    if (sessionStatus === "waiting_user" && questionCount > 0) {
+      setActiveTab("questions");
+      if (!isLg) {
+        setMobileNav("questions");
+        setPanelSheetOpen(true);
+      }
+    }
+  }, [sessionStatus, questionCount, isLg]);
 
   const handleExport = async () => {
     if (!sessionId) return;
@@ -136,8 +146,7 @@ export default function AgentWorkspace() {
         return (
           <div className="flex flex-col h-full min-h-0 p-3 space-y-3 overflow-y-auto">
             <SupervisorCard />
-            <RefinementPanel sessionId={sessionId} />
-            {isStuck && <RecoveryPanel sessionId={sessionId} />}
+            <AgentControlPanel sessionId={sessionId} />
           </div>
         );
       case "questions":
@@ -273,7 +282,18 @@ export default function AgentWorkspace() {
   }
 
   const criticalBanner =
-    questionCount > 0 ? (
+    sessionStatus === "waiting_user" && questionCount > 0 ? (
+      <div className="border-b border-sky-700/50 bg-sky-900/20 px-4 py-2 text-xs text-sky-200">
+        Агент ждёт ваши ответы ({questionCount} вопросов). Pipeline не начнётся, пока вы не
+        ответите на все —{" "}
+        <button
+          onClick={() => selectTab("questions")}
+          className="underline hover:text-sky-100 font-medium"
+        >
+          перейти к вопросам
+        </button>
+      </div>
+    ) : questionCount > 0 ? (
       <div className="border-b border-sky-700/50 bg-sky-900/10 px-4 py-2 text-xs text-sky-300">
         {questionCount} open question{questionCount > 1 ? "s" : ""} need your input —{" "}
         <button
@@ -350,7 +370,7 @@ export default function AgentWorkspace() {
             <SystemMetricsPanel />
             <div className="border-t border-border mt-2 pt-2 px-3 pb-2 space-y-2">
               <SupervisorCard />
-              <RefinementPanel sessionId={sessionId ?? ""} />
+              <AgentControlPanel sessionId={sessionId ?? ""} />
             </div>
           </div>
         )}
