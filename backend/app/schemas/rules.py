@@ -1,35 +1,36 @@
 """Pydantic models for JSON rules config (schema_version: '1.0')."""
+
 from __future__ import annotations
 
-from enum import Enum
-from typing import Annotated, Any, Literal
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.schemas.pipeline import DeliverableSpec, PipelineConfig
+from app.schemas.pipeline import PipelineConfig
 
 
-class SpecLevel(str, Enum):
+class SpecLevel(StrEnum):
     L1 = "L1"
     L2 = "L2"
     L3 = "L3"
     L4 = "L4"
 
 
-class Priority(str, Enum):
+class Priority(StrEnum):
     critical = "critical"
     high = "high"
     medium = "medium"
     low = "low"
 
 
-class Deployment(str, Enum):
+class Deployment(StrEnum):
     local = "local"
     cloud = "cloud"
     on_prem = "on_prem"
 
 
-class Budget(str, Enum):
+class Budget(StrEnum):
     low = "low"
     medium = "medium"
     high = "high"
@@ -94,6 +95,7 @@ class OllamaConfig(BaseModel):
 
 class HFConfig(BaseModel):
     """Deprecated — kept for backward compatibility with old rules JSON."""
+
     llm_model_id: str = "HuggingFaceH4/zephyr-7b-beta"
     fallback_model_ids: list[str] = Field(default_factory=list)
     embedding_model_id: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -166,7 +168,7 @@ class Rules(BaseModel):
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
     @model_validator(mode="after")
-    def validate_l4_cap(self) -> "Rules":
+    def validate_l4_cap(self) -> Rules:
         if self.spec_level == SpecLevel.L4 and self.l4.safety_cap_sec > 14400:
             raise ValueError("L4 safety_cap_sec cannot exceed 4 hours (14400s)")
         return self

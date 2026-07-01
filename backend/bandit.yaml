@@ -1,0 +1,7 @@
+# Bandit SAST — https://bandit.readthedocs.io/
+exclude_dirs:
+  - .venv
+  - tests
+
+skips:
+  - B101  # assert used in dev/tests

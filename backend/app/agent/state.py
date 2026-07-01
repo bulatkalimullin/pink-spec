@@ -1,4 +1,5 @@
 """LangGraph MultiAgentState and ContextState."""
+
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -18,7 +19,7 @@ class MultiAgentState(TypedDict):
     session_id: str
     idea: str
     rules: dict[str, Any]
-    spec_level: str          # L1|L2|L3|L4
+    spec_level: str  # L1|L2|L3|L4
 
     # Timing
     time_budget_sec: int | None
@@ -49,7 +50,7 @@ class MultiAgentState(TypedDict):
     review_reports: list[dict[str, Any]]
 
     # Health
-    status: str                 # running|paused|waiting_user|stuck|degraded|failed|completed|completed_partial
+    status: str  # running|paused|waiting_user|stuck|degraded|failed|completed|completed_partial
     errors: list[str]
     fallbacks_triggered: list[dict[str, Any]]
 

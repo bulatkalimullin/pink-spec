@@ -1,8 +1,9 @@
 """Session CRUD and lifecycle management."""
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import structlog
@@ -13,7 +14,7 @@ logger = structlog.get_logger(__name__)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 async def create_session(spec_level: str, idea: str, rules: dict) -> str:
@@ -103,7 +104,9 @@ async def get_latest_checkpoint(session_id: str) -> dict | None:
     return d
 
 
-async def save_question(session_id: str, question_id: str, text: str, options: list, priority: str) -> None:
+async def save_question(
+    session_id: str, question_id: str, text: str, options: list, priority: str
+) -> None:
     async with get_db() as db:
         await db.execute(
             "INSERT OR IGNORE INTO open_questions (id, session_id, text, options_json, priority, created_at) "

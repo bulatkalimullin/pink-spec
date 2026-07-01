@@ -1,23 +1,21 @@
 """Session REST routes."""
-from __future__ import annotations
 
-import asyncio
-from typing import Annotated
+from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 
-from app.schemas.rules import StartSessionRequest, AnswerRequest, RecoverRequest
-from app.services.session import (
-    create_session,
-    get_session,
-    get_open_questions,
-    answer_question,
-    get_latest_checkpoint,
-)
-from app.services.log_bus import log_bus
+from app.schemas.rules import AnswerRequest, RecoverRequest, StartSessionRequest
 from app.services.export import build_zip, read_artifact, read_task_file, session_output_dir
+from app.services.log_bus import log_bus
+from app.services.session import (
+    answer_question,
+    create_session,
+    get_latest_checkpoint,
+    get_open_questions,
+    get_session,
+)
 from app.services.session_watchdog import watchdog
 
 logger = structlog.get_logger(__name__)
@@ -26,7 +24,8 @@ router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 def _get_providers():
     """Lazy import to avoid circular at startup."""
-    from app.main import llm_provider, embedding_provider  # type: ignore
+    from app.main import embedding_provider, llm_provider  # type: ignore
+
     return llm_provider, embedding_provider
 
 
@@ -42,7 +41,9 @@ async def create_session_endpoint(body: StartSessionRequest):
 
 
 @router.post("/{session_id}/start")
-async def start_session(session_id: str, body: StartSessionRequest, background_tasks: BackgroundTasks):
+async def start_session(
+    session_id: str, body: StartSessionRequest, background_tasks: BackgroundTasks
+):
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -53,8 +54,10 @@ async def start_session(session_id: str, body: StartSessionRequest, background_t
 
     async def _run():
         from app.agent.graph import run_graph
+
         monitoring_cfg = body.rules.monitoring.model_dump()
         from app.services.system_monitor import system_monitor
+
         system_monitor.add_session(session_id, monitoring_cfg)
         try:
             await run_graph(
@@ -109,10 +112,14 @@ async def resume_session(session_id: str):
     checkpoint = await get_latest_checkpoint(session_id)
     if not checkpoint:
         raise HTTPException(404, "No checkpoint found")
-    await log_bus.emit(session_id, "recovery_started", {
-        "action": "resume_from_checkpoint",
-        "target_agent": checkpoint.get("agent_id"),
-    })
+    await log_bus.emit(
+        session_id,
+        "recovery_started",
+        {
+            "action": "resume_from_checkpoint",
+            "target_agent": checkpoint.get("agent_id"),
+        },
+    )
     return {"checkpoint_id": checkpoint["id"], "agent_id": checkpoint.get("agent_id")}
 
 
@@ -121,10 +128,14 @@ async def recover_session(session_id: str, body: RecoverRequest):
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    await log_bus.emit(session_id, "recovery_started", {
-        "action": body.action,
-        "target_agent": body.target_agent,
-    })
+    await log_bus.emit(
+        session_id,
+        "recovery_started",
+        {
+            "action": body.action,
+            "target_agent": body.target_agent,
+        },
+    )
     return {"status": "recovery_initiated", "action": body.action}
 
 
@@ -136,9 +147,9 @@ async def get_task_artifact(session_id: str, task_path: str):
     try:
         content = read_task_file(session_id, task_path)
     except ValueError:
-        raise HTTPException(400, "Invalid task path")
+        raise HTTPException(400, "Invalid task path") from None
     except FileNotFoundError:
-        raise HTTPException(404, "Task not found")
+        raise HTTPException(404, "Task not found") from None
     return PlainTextResponse(content, media_type="text/markdown")
 
 
@@ -148,11 +159,9 @@ async def get_artifact(session_id: str, artifact_type: str):
     if not session:
         raise HTTPException(404, "Session not found")
     try:
-        content, media_type = read_artifact(
-            session_id, artifact_type, session.get("manifest")
-        )
+        content, media_type = read_artifact(session_id, artifact_type, session.get("manifest"))
     except FileNotFoundError:
-        raise HTTPException(404, f"Artifact not found: {artifact_type}")
+        raise HTTPException(404, f"Artifact not found: {artifact_type}") from None
     return PlainTextResponse(content, media_type=media_type)
 
 

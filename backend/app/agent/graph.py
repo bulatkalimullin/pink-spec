@@ -1,4 +1,5 @@
 """Build and compile the LangGraph multi-agent graph."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,16 +10,15 @@ import structlog
 
 from app.agent.state import MultiAgentState, initial_state
 from app.agent.supervisor import supervisor_node
-from app.services.log_bus import log_bus
 from app.services.export import (
+    artifact_manifest_path,
     write_artifact,
+    write_gaps,
     write_manifest,
     write_task,
-    write_gaps,
     write_task_index,
-    artifact_manifest_path,
-    session_output_dir,
 )
+from app.services.log_bus import log_bus
 
 logger = structlog.get_logger(__name__)
 
@@ -35,10 +35,15 @@ async def _export_node(state: MultiAgentState) -> dict[str, Any]:
     )
     is_failed = artifacts_count == 0 and has_errors
 
-    await log_bus.emit(session_id, "log_entry", {
-        "level": "info", "agent_id": "export",
-        "message": f"Writing {len(artifacts)} artifacts and {len(tasks)} tasks..."
-    })
+    await log_bus.emit(
+        session_id,
+        "log_entry",
+        {
+            "level": "info",
+            "agent_id": "export",
+            "message": f"Writing {len(artifacts)} artifacts and {len(tasks)} tasks...",
+        },
+    )
 
     # Write artifacts
     for artifact_type, content in artifacts.items():
@@ -60,13 +65,18 @@ async def _export_node(state: MultiAgentState) -> dict[str, Any]:
 
     # Write gaps.md if partial or failed
     if is_partial or is_failed or state.get("errors"):
-        write_gaps(session_id, {
-            "status": "failed" if is_failed else state.get("status", "unknown"),
-            "reason": "time_budget_exceeded" if is_partial and not is_failed else "errors",
-            "failed_steps": [{"agent": e.split(":")[0], "reason": e} for e in state.get("errors", [])],
-            "open_questions": [q.get("text", "") for q in state.get("open_questions", [])],
-            "manual_actions": ["Review gaps.md and complete missing sections manually"],
-        })
+        write_gaps(
+            session_id,
+            {
+                "status": "failed" if is_failed else state.get("status", "unknown"),
+                "reason": "time_budget_exceeded" if is_partial and not is_failed else "errors",
+                "failed_steps": [
+                    {"agent": e.split(":")[0], "reason": e} for e in state.get("errors", [])
+                ],
+                "open_questions": [q.get("text", "") for q in state.get("open_questions", [])],
+                "manual_actions": ["Review gaps.md and complete missing sections manually"],
+            },
+        )
 
     # Build manifest
     elapsed = time.time() - state["started_at"]
@@ -75,9 +85,7 @@ async def _export_node(state: MultiAgentState) -> dict[str, Any]:
         "spec_level": state["spec_level"],
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "duration_sec": int(elapsed),
-        "artifacts": {
-            k: artifact_manifest_path(k) for k in artifacts if artifacts[k]
-        },
+        "artifacts": {k: artifact_manifest_path(k) for k in artifacts if artifacts[k]},
         "pipeline": state.get("pipeline", []),
         "pipeline_reasoning": state.get("pipeline_reasoning", ""),
         "tasks": {"count": len(tasks), "phases": _count_phases(tasks)},
@@ -100,14 +108,18 @@ async def _export_node(state: MultiAgentState) -> dict[str, Any]:
         final_status = "completed_partial"
     else:
         final_status = "completed"
-    await log_bus.emit(session_id, "done", {
-        "duration_sec": elapsed,
-        "artifacts_count": artifacts_count,
-        "tasks_count": len(tasks),
-        "assumptions_count": len(state.get("assumptions", [])),
-        "fallbacks_count": len(state.get("fallbacks_triggered", [])),
-        "is_partial": is_partial,
-    })
+    await log_bus.emit(
+        session_id,
+        "done",
+        {
+            "duration_sec": elapsed,
+            "artifacts_count": artifacts_count,
+            "tasks_count": len(tasks),
+            "assumptions_count": len(state.get("assumptions", [])),
+            "fallbacks_count": len(state.get("fallbacks_triggered", [])),
+            "is_partial": is_partial,
+        },
+    )
 
     return {**state, "status": final_status}
 
@@ -127,18 +139,18 @@ async def run_graph(
     Main entry point — runs the entire agent graph.
     This is called as an asyncio.Task so it runs concurrently with the API.
     """
-    from app.agent.agents.product_analyst import ProductAnalystAgent
-    from app.agent.agents.architect import ArchitectAgent
     from app.agent.agents.api_designer import APIDesignerAgent
-    from app.agent.agents.ui_designer import UIDesignerAgent
-    from app.agent.agents.task_decomposer import TaskDecomposerAgent
+    from app.agent.agents.architect import ArchitectAgent
+    from app.agent.agents.context_manager import ContextManagerAgent
+    from app.agent.agents.generic_spec import GenericSpecAgent
+    from app.agent.agents.pipeline_planner import PipelinePlannerAgent
+    from app.agent.agents.product_analyst import ProductAnalystAgent
     from app.agent.agents.researcher import ResearcherAgent
     from app.agent.agents.reviewer import ReviewerAgent
-    from app.agent.agents.context_manager import ContextManagerAgent
-    from app.agent.agents.pipeline_planner import PipelinePlannerAgent
-    from app.agent.agents.generic_spec import GenericSpecAgent
+    from app.agent.agents.task_decomposer import TaskDecomposerAgent
+    from app.agent.agents.ui_designer import UIDesignerAgent
     from app.agent.pipeline_utils import step_builtin_agent_id
-    from app.services.session import update_session_status, save_checkpoint, save_pipeline
+    from app.services.session import save_checkpoint, save_pipeline, update_session_status
     from app.services.session_watchdog import watchdog
 
     spec_level = rules.get("spec_level", "L2")
@@ -152,22 +164,32 @@ async def run_graph(
     )
 
     await update_session_status(session_id, "running")
-    await log_bus.emit(session_id, "log_entry", {
-        "level": "info", "agent_id": "system",
-        "message": f"Starting {spec_level} session — budget: {time_budget}s"
-    })
+    await log_bus.emit(
+        session_id,
+        "log_entry",
+        {
+            "level": "info",
+            "agent_id": "system",
+            "message": f"Starting {spec_level} session — budget: {time_budget}s",
+        },
+    )
 
-    from app.services.session import save_pipeline
     if state.get("pipeline_planned") and state.get("pipeline"):
         await save_pipeline(session_id, state["pipeline"], state.get("pipeline_reasoning", ""))
-        await log_bus.emit(session_id, "pipeline_planned", {
-            "steps": state["pipeline"],
-            "reasoning": state.get("pipeline_reasoning") or f"Fixed pipeline for {spec_level}",
-        })
+        await log_bus.emit(
+            session_id,
+            "pipeline_planned",
+            {
+                "steps": state["pipeline"],
+                "reasoning": state.get("pipeline_reasoning") or f"Fixed pipeline for {spec_level}",
+            },
+        )
 
     # Build agents
     builtin_agents = {
-        "researcher": ResearcherAgent(llm=llm_provider, embedding_provider=embedding_provider, rag_cfg=rules.get("rag", {})),
+        "researcher": ResearcherAgent(
+            llm=llm_provider, embedding_provider=embedding_provider, rag_cfg=rules.get("rag", {})
+        ),
         "pipeline_planner": PipelinePlannerAgent(llm=llm_provider),
         "product_analyst": ProductAnalystAgent(llm=llm_provider),
         "architect": ArchitectAgent(llm=llm_provider),
@@ -216,10 +238,14 @@ async def run_graph(
 
             cb = wd_state.get_circuit_breaker(current)
             if cb.is_open():
-                await log_bus.emit(session_id, "circuit_breaker_open", {
-                    "agent_id": current,
-                    "retry_after_sec": cb.cooldown_sec,
-                })
+                await log_bus.emit(
+                    session_id,
+                    "circuit_breaker_open",
+                    {
+                        "agent_id": current,
+                        "retry_after_sec": cb.cooldown_sec,
+                    },
+                )
                 await asyncio.sleep(min(cb.cooldown_sec, 30))
                 state["current_agent"] = "supervisor"
                 continue
@@ -229,30 +255,46 @@ async def run_graph(
                 break
             if agent is None:
                 logger.error("unknown_agent", agent=current)
-                state = {**state, "current_agent": "supervisor", "errors": [*state.get("errors", []), f"Unknown agent: {current}"]}
+                state = {
+                    **state,
+                    "current_agent": "supervisor",
+                    "errors": [*state.get("errors", []), f"Unknown agent: {current}"],
+                }
                 continue
 
             try:
                 prev_errors = len(state.get("errors", []))
-                state = {**state, **await asyncio.wait_for(
-                    agent.run(state),
-                    timeout=resilience_cfg.get("agent_timeout_sec", 600)
-                )}
+                state = {
+                    **state,
+                    **await asyncio.wait_for(
+                        agent.run(state), timeout=resilience_cfg.get("agent_timeout_sec", 600)
+                    ),
+                }
                 agent_failed = state.pop("_last_agent_failed", False)
                 if agent_failed or len(state.get("errors", [])) > prev_errors:
                     if cb.record_failure():
-                        await log_bus.emit(session_id, "circuit_breaker_open", {
-                            "agent_id": current,
-                            "retry_after_sec": resilience_cfg.get("circuit_breaker_cooldown_sec", 60),
-                        })
+                        await log_bus.emit(
+                            session_id,
+                            "circuit_breaker_open",
+                            {
+                                "agent_id": current,
+                                "retry_after_sec": resilience_cfg.get(
+                                    "circuit_breaker_cooldown_sec", 60
+                                ),
+                            },
+                        )
                 else:
                     cb.record_success()
             except TimeoutError:
                 cb.record_failure()
-                await log_bus.emit(session_id, "agent_timeout", {
-                    "agent_id": current,
-                    "timeout_sec": resilience_cfg.get("agent_timeout_sec", 600),
-                })
+                await log_bus.emit(
+                    session_id,
+                    "agent_timeout",
+                    {
+                        "agent_id": current,
+                        "timeout_sec": resilience_cfg.get("agent_timeout_sec", 600),
+                    },
+                )
                 state = {
                     **state,
                     "current_agent": "supervisor",
@@ -262,10 +304,16 @@ async def run_graph(
             except Exception as e:
                 cb.record_failure()
                 if cb.record_failure():
-                    await log_bus.emit(session_id, "circuit_breaker_open", {
-                        "agent_id": current,
-                        "retry_after_sec": resilience_cfg.get("circuit_breaker_cooldown_sec", 60),
-                    })
+                    await log_bus.emit(
+                        session_id,
+                        "circuit_breaker_open",
+                        {
+                            "agent_id": current,
+                            "retry_after_sec": resilience_cfg.get(
+                                "circuit_breaker_cooldown_sec", 60
+                            ),
+                        },
+                    )
                 state = {
                     **state,
                     "current_agent": "supervisor",
@@ -276,9 +324,11 @@ async def run_graph(
             if checkpoint_enabled:
                 try:
                     cp_id = await save_checkpoint(session_id, current, _slim_state(state))
-                    await log_bus.emit(session_id, "checkpoint_saved", {
-                        "checkpoint_id": cp_id, "agent_id": current
-                    })
+                    await log_bus.emit(
+                        session_id,
+                        "checkpoint_saved",
+                        {"checkpoint_id": cp_id, "agent_id": current},
+                    )
                     state = {**state, "checkpoints": [*state.get("checkpoints", []), cp_id]}
                 except Exception as e:
                     logger.warning("checkpoint_failed", error=str(e))
@@ -288,9 +338,9 @@ async def run_graph(
 
     except Exception as e:
         logger.exception("graph_fatal_error", error=str(e))
-        await log_bus.emit(session_id, "error", {
-            "code": "GRAPH_FATAL", "message": str(e), "recoverable": False
-        })
+        await log_bus.emit(
+            session_id, "error", {"code": "GRAPH_FATAL", "message": str(e), "recoverable": False}
+        )
         state = {**state, "status": "failed"}
     finally:
         watchdog.unregister(session_id)

@@ -1,7 +1,7 @@
 """Embedding Saturation algorithm — iterative retrieval until novelty drops below threshold."""
+
 from __future__ import annotations
 
-import asyncio
 import math
 from typing import Any
 
@@ -11,7 +11,7 @@ logger = structlog.get_logger(__name__)
 
 
 def _cosine_distance(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
@@ -67,7 +67,7 @@ async def run_saturation(
             novelties = [_min_distance_to_set(v, collected_vecs) for v in vecs]
             avg_novelty = sum(novelties) / len(novelties)
 
-            for chunk, vec, novelty in zip(new_chunks, vecs, novelties):
+            for chunk, vec, novelty in zip(new_chunks, vecs, novelties, strict=True):
                 if novelty >= novelty_threshold:
                     collected_texts.append(chunk["text"])
                     collected_vecs.append(vec)
@@ -83,18 +83,13 @@ async def run_saturation(
             },
         )
 
-        satisfied = (
-            avg_novelty < novelty_threshold
-            and len(collected_texts) >= min_chunks
-        )
+        satisfied = avg_novelty < novelty_threshold and len(collected_texts) >= min_chunks
         if satisfied or iteration == max_iter:
             break
 
         # Expand queries via LLM if enabled
         if query_expansion:
-            queries = await _expand_queries(
-                queries, collected_texts[-5:], session_id=session_id
-            )
+            queries = await _expand_queries(queries, collected_texts[-5:], session_id=session_id)
             query_history.extend(queries)
 
     context_brief = _build_context_brief(collected_texts)
@@ -109,7 +104,9 @@ async def run_saturation(
     }
 
 
-async def _expand_queries(current_queries: list[str], sample_chunks: list[str], session_id: str) -> list[str]:
+async def _expand_queries(
+    current_queries: list[str], sample_chunks: list[str], session_id: str
+) -> list[str]:
     """Use a simple heuristic expansion (LLM call is optional and skipped if no provider)."""
     # In full implementation this would call the LLM for query expansion.
     # Here we produce suffix variants of existing queries as a lightweight fallback.

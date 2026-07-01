@@ -1,4 +1,5 @@
 """Export session artifacts to output/{session_id}/ and ZIP bundle."""
+
 from __future__ import annotations
 
 import json
@@ -120,29 +121,29 @@ def write_task_roadmap(session_id: str, content: str) -> Path:
 def _render_task(task: dict) -> str:
     depends = ", ".join(f'"{d}"' for d in task.get("depends_on", []))
     spec_refs = "\n".join(f'  - "{r}"' for r in task.get("spec_refs", []))
-    steps = "\n".join(f"{i+1}. {s}" for i, s in enumerate(task.get("steps", [])))
+    steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(task.get("steps", [])))
     criteria = "\n".join(f"- [ ] {c}" for c in task.get("acceptance_criteria", []))
     notes = "\n".join(f"- {n}" for n in task.get("notes", []))
 
     return f"""---
-id: "{task.get('id', '000')}"
-phase: "{task.get('phase', '')}"
-title: "{task.get('title', '')}"
-priority: {task.get('priority', 'medium')}
-estimated_minutes: {task.get('estimated_minutes', 30)}
+id: "{task.get("id", "000")}"
+phase: "{task.get("phase", "")}"
+title: "{task.get("title", "")}"
+priority: {task.get("priority", "medium")}
+estimated_minutes: {task.get("estimated_minutes", 30)}
 depends_on: [{depends}]
 spec_refs:
-{spec_refs or '  []'}
+{spec_refs or "  []"}
 status: todo
 ---
 
 ## Goal
 
-{task.get('goal', '')}
+{task.get("goal", "")}
 
 ## Context
 
-{task.get('context', '')}
+{task.get("context", "")}
 
 ## Steps
 
@@ -154,11 +155,11 @@ status: todo
 
 ## Notes / Pitfalls
 
-{notes or 'N/A'}
+{notes or "N/A"}
 
 ## Verification
 
-{task.get('verification', 'Manual review.')}
+{task.get("verification", "Manual review.")}
 """
 
 

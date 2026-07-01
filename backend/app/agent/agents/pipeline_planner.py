@@ -1,4 +1,5 @@
 """Pipeline Planner — builds dynamic agent pipeline from idea and rules."""
+
 from __future__ import annotations
 
 import json
@@ -46,8 +47,13 @@ Rules:
 """
 
 BUILTIN_EXECUTORS = {
-    "product_analyst", "architect", "api_designer", "ui_designer",
-    "context_manager", "task_decomposer", "reviewer",
+    "product_analyst",
+    "architect",
+    "api_designer",
+    "ui_designer",
+    "context_manager",
+    "task_decomposer",
+    "reviewer",
 }
 
 
@@ -76,12 +82,17 @@ class PipelinePlannerAgent(BaseAgent):
         steps = self._apply_level_defaults(steps, spec_level, pipeline_cfg)
         steps = self._apply_idea_heuristics(steps, state["idea"])
 
-        await log_bus.emit(session_id, "pipeline_planned", {
-            "steps": steps,
-            "reasoning": reasoning,
-        })
+        await log_bus.emit(
+            session_id,
+            "pipeline_planned",
+            {
+                "steps": steps,
+                "reasoning": reasoning,
+            },
+        )
 
         from app.services.session import save_pipeline
+
         await save_pipeline(session_id, steps, reasoning)
 
         return {
@@ -98,7 +109,9 @@ class PipelinePlannerAgent(BaseAgent):
         rules = state["rules"]
         rules_snapshot = self._rules_snapshot(state)
         agent_rules = rules.get("agent_rules", [])
-        rules_text = "\n".join(f"- [{r.get('priority', 'medium')}] {r.get('rule', '')}" for r in agent_rules[:15])
+        rules_text = "\n".join(
+            f"- [{r.get('priority', 'medium')}] {r.get('rule', '')}" for r in agent_rules[:15]
+        )
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -126,7 +139,9 @@ class PipelinePlannerAgent(BaseAgent):
             steps = data.get("steps", [])
             return _normalize_steps(steps, spec_level), reasoning
         except Exception as e:
-            await self._log(state["session_id"], "warn", f"LLM planner failed ({e}), using defaults")
+            await self._log(
+                state["session_id"], "warn", f"LLM planner failed ({e}), using defaults"
+            )
             return [], ""
 
     def _apply_level_defaults(
@@ -141,61 +156,82 @@ class PipelinePlannerAgent(BaseAgent):
             include_tasks = spec_level != "L1"
 
         if include_tasks and "task_decomposer" not in ids:
-            steps.append({
-                "id": "task_decomposer",
-                "name": "Task Decomposition",
-                "executor": "builtin:task_decomposer",
-                "artifact_key": None,
-                "required": spec_level != "L1",
-                "target_count": TASK_COUNT_BY_LEVEL.get(spec_level, 20),
-            })
+            steps.append(
+                {
+                    "id": "task_decomposer",
+                    "name": "Task Decomposition",
+                    "executor": "builtin:task_decomposer",
+                    "artifact_key": None,
+                    "required": spec_level != "L1",
+                    "target_count": TASK_COUNT_BY_LEVEL.get(spec_level, 20),
+                }
+            )
 
         if spec_level in ("L2", "L3", "L4") and "reviewer" not in ids:
-            steps.append({
-                "id": "reviewer",
-                "name": "Reviewer",
-                "executor": "builtin:reviewer",
-                "artifact_key": None,
-                "required": True,
-            })
+            steps.append(
+                {
+                    "id": "reviewer",
+                    "name": "Reviewer",
+                    "executor": "builtin:reviewer",
+                    "artifact_key": None,
+                    "required": True,
+                }
+            )
 
         if spec_level in ("L3", "L4") and "context_manager" not in ids:
             insert_at = next(
                 (i for i, s in enumerate(steps) if s["id"] == "task_decomposer"),
                 len(steps),
             )
-            steps.insert(insert_at, {
-                "id": "context_manager",
-                "name": "Context Manager",
-                "executor": "builtin:context_manager",
-                "artifact_key": None,
-                "required": False,
-            })
+            steps.insert(
+                insert_at,
+                {
+                    "id": "context_manager",
+                    "name": "Context Manager",
+                    "executor": "builtin:context_manager",
+                    "artifact_key": None,
+                    "required": False,
+                },
+            )
 
         return steps
 
-    def _apply_idea_heuristics(self, steps: list[dict[str, Any]], idea: str) -> list[dict[str, Any]]:
+    def _apply_idea_heuristics(
+        self, steps: list[dict[str, Any]], idea: str
+    ) -> list[dict[str, Any]]:
         idea_lower = idea.lower()
         backend_only_signals = [
-            "kafka", "pytorch", "ml pipeline", "fraud detection", "streaming",
-            "etl", "data pipeline", "microservice", "backend only", "no ui",
+            "kafka",
+            "pytorch",
+            "ml pipeline",
+            "fraud detection",
+            "streaming",
+            "etl",
+            "data pipeline",
+            "microservice",
+            "backend only",
+            "no ui",
         ]
         if any(sig in idea_lower for sig in backend_only_signals):
             steps = [
-                s for s in steps
+                s
+                for s in steps
                 if s.get("id") not in ("ui_designer", "api_designer")
                 and s.get("artifact_key") not in ("ui_spec",)
             ]
             has_api = any(s.get("artifact_key") == "api_spec" for s in steps)
             if not has_api and any(w in idea_lower for w in ("api", "rest", "graphql", "fastapi")):
                 meta = BUILTIN_STEP_META["api_designer"]
-                steps.insert(2, {
-                    "id": "api_designer",
-                    "name": meta["name"],
-                    "executor": meta["executor"],
-                    "artifact_key": meta["artifact_key"],
-                    "required": False,
-                })
+                steps.insert(
+                    2,
+                    {
+                        "id": "api_designer",
+                        "name": meta["name"],
+                        "executor": meta["executor"],
+                        "artifact_key": meta["artifact_key"],
+                        "required": False,
+                    },
+                )
         return steps
 
 
@@ -226,23 +262,29 @@ def _normalize_steps(steps: list[dict], spec_level: str) -> list[dict[str, Any]]
             builtin_id = executor.split(":", 1)[1]
             if builtin_id in BUILTIN_STEP_META:
                 meta = BUILTIN_STEP_META[builtin_id]
-                out.append({
-                    "id": builtin_id,
-                    "name": s.get("name") or meta["name"],
-                    "executor": meta["executor"],
-                    "artifact_key": s.get("artifact_key", meta.get("artifact_key")),
-                    "required": s.get("required", True),
-                    "target_count": s.get("target_count") if builtin_id == "task_decomposer" else None,
-                    "prompt_focus": s.get("prompt_focus"),
-                })
+                out.append(
+                    {
+                        "id": builtin_id,
+                        "name": s.get("name") or meta["name"],
+                        "executor": meta["executor"],
+                        "artifact_key": s.get("artifact_key", meta.get("artifact_key")),
+                        "required": s.get("required", True),
+                        "target_count": s.get("target_count")
+                        if builtin_id == "task_decomposer"
+                        else None,
+                        "prompt_focus": s.get("prompt_focus"),
+                    }
+                )
                 continue
-        out.append({
-            "id": step_id,
-            "name": s.get("name", step_id.replace("_", " ").title()),
-            "executor": executor if executor == "generic" else "generic",
-            "artifact_key": s.get("artifact_key", step_id),
-            "required": s.get("required", True),
-            "prompt_focus": s.get("prompt_focus", s.get("description", "")),
-            "target_count": s.get("target_count"),
-        })
+        out.append(
+            {
+                "id": step_id,
+                "name": s.get("name", step_id.replace("_", " ").title()),
+                "executor": executor if executor == "generic" else "generic",
+                "artifact_key": s.get("artifact_key", step_id),
+                "required": s.get("required", True),
+                "prompt_focus": s.get("prompt_focus", s.get("description", "")),
+                "target_count": s.get("target_count"),
+            }
+        )
     return out

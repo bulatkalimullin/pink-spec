@@ -1,4 +1,5 @@
 """Centralized environment configuration."""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
         if normalized not in ("keyword", "none"):
             raise ValueError("OLLAMA_EMBEDDING_FALLBACK must be 'keyword' or 'none'")
         return normalized
+
     ollama_keep_alive: str = Field(default="5m", alias="OLLAMA_KEEP_ALIVE")
     ollama_timeout_sec: float = Field(default=120.0, alias="OLLAMA_TIMEOUT_SEC")
     ollama_port: int = Field(default=11434, alias="OLLAMA_PORT")

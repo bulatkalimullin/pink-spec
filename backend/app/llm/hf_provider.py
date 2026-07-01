@@ -1,7 +1,9 @@
 """LLM and embedding provider protocols and factories (Ollama)."""
+
 from __future__ import annotations
 
-from typing import AsyncIterator, Protocol, runtime_checkable
+from collections.abc import AsyncIterator
+from typing import Protocol, runtime_checkable
 
 import structlog
 
@@ -50,7 +52,7 @@ class OllamaLLMFallback:
 
     async def generate(self, messages: list[dict], **kwargs) -> str:
         last_err: Exception | None = None
-        for provider, model in zip(self._providers, self._model_names):
+        for provider, model in zip(self._providers, self._model_names, strict=True):
             try:
                 return await provider.generate(messages, **kwargs)
             except Exception as e:
@@ -69,7 +71,9 @@ def build_llm_provider(cfg: dict) -> LLMProvider:
 
     base_url: str = cfg.get("ollama_base_url", "http://localhost:11434")
     models: list[str] = [
-        m for m in [cfg.get("ollama_llm_model", "llama3.2"), *cfg.get("ollama_llm_fallbacks", [])] if m
+        m
+        for m in [cfg.get("ollama_llm_model", "llama3.2"), *cfg.get("ollama_llm_fallbacks", [])]
+        if m
     ]
     if not models:
         raise RuntimeError("OLLAMA_LLM_MODEL is not configured")
@@ -99,7 +103,13 @@ def build_llm_provider(cfg: dict) -> LLMProvider:
         logger.info("llm_provider_ready", mode="ollama", model=models[0], base_url=base_url)
         return providers[0]
 
-    logger.info("llm_provider_ready", mode="ollama", model=models[0], fallbacks=models[1:], base_url=base_url)
+    logger.info(
+        "llm_provider_ready",
+        mode="ollama",
+        model=models[0],
+        fallbacks=models[1:],
+        base_url=base_url,
+    )
     return OllamaLLMFallback(providers, models)
 
 

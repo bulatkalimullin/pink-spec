@@ -1,10 +1,11 @@
 """Session Watchdog — detects stuck sessions and manages circuit breakers."""
+
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import structlog
 
@@ -135,7 +136,9 @@ class SessionWatchdog:
                     continue
 
                 if state.is_agent_timed_out():
-                    logger.warning("agent_timeout", session_id=session_id, agent=state.current_agent)
+                    logger.warning(
+                        "agent_timeout", session_id=session_id, agent=state.current_agent
+                    )
                     await log_bus.emit(
                         session_id,
                         "agent_timeout",

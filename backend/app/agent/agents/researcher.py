@@ -1,4 +1,5 @@
 """Researcher agent — RAG retrieval and context enrichment."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -23,7 +24,12 @@ class ResearcherAgent(BaseAgent):
 
         if not rag_cfg.get("enabled", False):
             await self._log(session_id, "info", "RAG disabled — skipping researcher phase")
-            saturation_report = {"status": "skipped", "iterations": 0, "chunks_collected": 0, "context_brief": ""}
+            saturation_report = {
+                "status": "skipped",
+                "iterations": 0,
+                "chunks_collected": 0,
+                "context_brief": "",
+            }
             return {
                 **state,
                 "agent_outputs": {**state.get("agent_outputs", {}), "researcher": "skipped"},
@@ -31,20 +37,28 @@ class ResearcherAgent(BaseAgent):
                 "current_agent": "supervisor",
             }
 
-        from app.rag.retriever import ChromaRetriever, BM25Retriever
         from app.rag.ingest import ingest_sources
+        from app.rag.retriever import BM25Retriever, ChromaRetriever
         from app.rag.saturation import run_saturation
 
         # Build retriever
         try:
-            retriever = ChromaRetriever(session_id=session_id, embedding_provider=self._embedding_provider)
+            retriever = ChromaRetriever(
+                session_id=session_id, embedding_provider=self._embedding_provider
+            )
         except Exception as e:
             await self._log(session_id, "warn", f"ChromaDB unavailable ({e}), using BM25 fallback")
-            await log_bus.emit(session_id, "fallback_triggered", {
-                "layer": "rag", "step": "retriever",
-                "from": "chroma", "to": "bm25",
-                "message": f"ChromaDB unavailable: {e}",
-            })
+            await log_bus.emit(
+                session_id,
+                "fallback_triggered",
+                {
+                    "layer": "rag",
+                    "step": "retriever",
+                    "from": "chroma",
+                    "to": "bm25",
+                    "message": f"ChromaDB unavailable: {e}",
+                },
+            )
             retriever = BM25Retriever()
 
         # Ingest sources
@@ -53,8 +67,9 @@ class ResearcherAgent(BaseAgent):
             await self._log(session_id, "info", f"Ingesting {len(sources)} source(s)...")
             ingest_result = await ingest_sources(sources, retriever, session_id)
             await self._log(
-                session_id, "info",
-                f"Ingest complete: {ingest_result['files_ok']} files, {ingest_result['chunks']} chunks"
+                session_id,
+                "info",
+                f"Ingest complete: {ingest_result['files_ok']} files, {ingest_result['chunks']} chunks",
             )
 
         # Saturation
@@ -75,12 +90,20 @@ class ResearcherAgent(BaseAgent):
                 cfg=sat_cfg,
             )
         except Exception as e:
-            await self._log(session_id, "warn", f"RAG saturation failed ({e}), skipping researcher phase")
-            await log_bus.emit(session_id, "fallback_triggered", {
-                "layer": "rag", "step": "saturation",
-                "from": "chroma", "to": "skipped",
-                "message": str(e),
-            })
+            await self._log(
+                session_id, "warn", f"RAG saturation failed ({e}), skipping researcher phase"
+            )
+            await log_bus.emit(
+                session_id,
+                "fallback_triggered",
+                {
+                    "layer": "rag",
+                    "step": "saturation",
+                    "from": "chroma",
+                    "to": "skipped",
+                    "message": str(e),
+                },
+            )
             saturation_report = {
                 "status": "skipped",
                 "iterations": 0,
@@ -90,8 +113,9 @@ class ResearcherAgent(BaseAgent):
             }
 
         await self._log(
-            session_id, "info",
-            f"Saturation {saturation_report['status']}: {saturation_report['chunks_collected']} chunks in {saturation_report['iterations']} iterations"
+            session_id,
+            "info",
+            f"Saturation {saturation_report['status']}: {saturation_report['chunks_collected']} chunks in {saturation_report['iterations']} iterations",
         )
 
         # Update context state
@@ -100,7 +124,10 @@ class ResearcherAgent(BaseAgent):
 
         return {
             **state,
-            "agent_outputs": {**state.get("agent_outputs", {}), "researcher": saturation_report["status"]},
+            "agent_outputs": {
+                **state.get("agent_outputs", {}),
+                "researcher": saturation_report["status"],
+            },
             "saturation_report": saturation_report,
             "context": new_context,
             "current_agent": "supervisor",

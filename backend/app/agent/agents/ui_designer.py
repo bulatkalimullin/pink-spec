@@ -1,4 +1,5 @@
 """UI Designer agent — screens, flows, component map."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -54,19 +55,23 @@ class UIDesignerAgent(BaseAgent):
         await self._log(session_id, "info", "Designing UI screens and user flows...")
         output = await self._llm.generate(messages)
 
-        await log_bus.emit(session_id, "artifact_preview", {
-            "artifact_type": "ui_spec",
-            "chunk": output[:500],
-        })
+        await log_bus.emit(
+            session_id,
+            "artifact_preview",
+            {
+                "artifact_type": "ui_spec",
+                "chunk": output[:500],
+            },
+        )
 
         assumptions = list(state.get("assumptions", []))
         for line in output.split("\n"):
             if "[ASSUMPTION]" in line:
                 text = line.replace("[ASSUMPTION]", "").strip()
                 assumptions.append(f"ui_designer: {text}")
-                await log_bus.emit(session_id, "assumption_logged", {
-                    "text": text, "agent_id": self.agent_id
-                })
+                await log_bus.emit(
+                    session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
+                )
 
         new_outputs = {**state.get("agent_outputs", {}), "ui_designer": output}
         new_artifacts = {**state.get("artifacts", {}), "ui_spec": output}

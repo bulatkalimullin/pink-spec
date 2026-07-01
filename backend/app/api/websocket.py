@@ -1,15 +1,16 @@
 """WebSocket handler — subscribes to LogBus and streams events to the client."""
+
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.services.log_bus import log_bus
-from app.services.session import get_session, answer_question
+from app.services.session import answer_question, get_session
 from app.services.session_watchdog import watchdog
 
 logger = structlog.get_logger(__name__)
@@ -28,15 +29,19 @@ async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
     session = await get_session(session_id)
     if session:
         history = await log_bus.get_log_history(session_id, from_seq=0, limit=RECONNECT_LOG_TAIL)
-        await websocket.send_text(json.dumps({
-            "type": "session_snapshot",
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "session_id": session_id,
-            "payload": {
-                "status": session.get("status"),
-                "log_tail": history,
-            },
-        }))
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "session_snapshot",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "session_id": session_id,
+                    "payload": {
+                        "status": session.get("status"),
+                        "log_tail": history,
+                    },
+                }
+            )
+        )
 
     # Heartbeat
     async def heartbeat() -> None:
@@ -98,24 +103,32 @@ async def _handle_client_message(session_id: str, msg: dict) -> None:
         state = watchdog.get_state(session_id)
         if state:
             state.status = "failed"
-        await log_bus.emit(session_id, "log_entry", {
-            "level": "warn", "agent_id": "system",
-            "message": "Session cancelled by user"
-        })
+        await log_bus.emit(
+            session_id,
+            "log_entry",
+            {"level": "warn", "agent_id": "system", "message": "Session cancelled by user"},
+        )
 
     elif msg_type in ("pause", "resume"):
         state = watchdog.get_state(session_id)
         if state:
             state.status = "paused" if msg_type == "pause" else "running"
-        await log_bus.emit(session_id, "log_entry", {
-            "level": "info", "agent_id": "system",
-            "message": f"Session {msg_type}d by user"
-        })
+        await log_bus.emit(
+            session_id,
+            "log_entry",
+            {"level": "info", "agent_id": "system", "message": f"Session {msg_type}d by user"},
+        )
 
     elif msg_type == "request_snapshot":
         session = await get_session(session_id)
-        history = await log_bus.get_log_history(session_id, from_seq=msg.get("from_seq", 0), limit=500)
-        await log_bus.emit(session_id, "session_snapshot", {
-            "status": session.get("status") if session else "unknown",
-            "log_tail": history,
-        })
+        history = await log_bus.get_log_history(
+            session_id, from_seq=msg.get("from_seq", 0), limit=500
+        )
+        await log_bus.emit(
+            session_id,
+            "session_snapshot",
+            {
+                "status": session.get("status") if session else "unknown",
+                "log_tail": history,
+            },
+        )

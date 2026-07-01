@@ -1,4 +1,4 @@
-.PHONY: up up-ollama-docker down build logs dev install install-backend install-frontend clean open help setup-mirrors ollama-pull ollama-list
+.PHONY: up up-ollama-docker down build logs dev install install-backend install-frontend clean open help setup-mirrors ollama-pull ollama-list lint lint-backend lint-frontend sast ci
 
 # ─── Env + зеркала ─────────────────────────────────────────────────────────────
 -include mirrors.env
@@ -102,6 +102,26 @@ clean:
 open:
 	xdg-open http://localhost:3000
 
+# ─── Lint & SAST (локально, как в CI) ─────────────────────────────────────────
+
+lint-backend:
+	cd backend && uvx ruff check app && uvx ruff format --check app
+
+lint-frontend:
+	cd frontend && npm run lint && npm run build
+
+lint: lint-backend lint-frontend
+
+sast-backend:
+	cd backend && uvx bandit -r app -c bandit.yaml
+
+sast-frontend:
+	cd frontend && npm audit --audit-level=high
+
+sast: sast-backend sast-frontend
+
+ci: lint sast
+
 help:
 	@echo ""
 	@echo "Pink Spec Agent"
@@ -115,6 +135,7 @@ help:
 	@echo "  make logs / down     — логи / остановка"
 	@echo ""
 	@echo "  make install && make dev  — локально без Docker (нужен Ollama на :11434)"
+	@echo "  make lint / make sast / make ci — линты и SAST (как в GitHub Actions)"
 	@echo ""
 	@echo "Зеркала (mirrors.env):"
 	@echo "  Docker Hub : $(DOCKER_MIRROR)"

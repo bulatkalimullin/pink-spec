@@ -1,4 +1,5 @@
 """Task Decomposer agent — breaks roadmap into micro-tasks (15-60 min each)."""
+
 from __future__ import annotations
 
 import json
@@ -118,19 +119,19 @@ class TaskDecomposerAgent(BaseAgent):
             phases[phase] = phases.get(phase, 0) + 1
 
         for phase, count in phases.items():
-            await log_bus.emit(session_id, "task_batch_generated", {
-                "phase": phase, "count": count
-            })
+            await log_bus.emit(session_id, "task_batch_generated", {"phase": phase, "count": count})
 
         await self._log(session_id, "info", f"Generated {len(tasks)} tasks in {len(phases)} phases")
 
         roadmap_md = ""
         if tasks:
             try:
-                roadmap_md = await self._llm.generate([
-                    {"role": "system", "content": ROADMAP_PROMPT},
-                    {"role": "user", "content": json.dumps(tasks[:30], indent=2)[:6000]},
-                ])
+                roadmap_md = await self._llm.generate(
+                    [
+                        {"role": "system", "content": ROADMAP_PROMPT},
+                        {"role": "user", "content": json.dumps(tasks[:30], indent=2)[:6000]},
+                    ]
+                )
                 write_task_roadmap(session_id, roadmap_md)
             except Exception:
                 roadmap_md = _fallback_roadmap(tasks)
@@ -159,7 +160,9 @@ def _normalize_spec_refs(tasks: list[dict]) -> list[dict]:
                 normalized.append(f"docs/{r}")
             elif not r.startswith("docs/") and "#" in r:
                 parts = r.split("#", 1)
-                normalized.append(f"docs/{parts[0]}.md#{parts[1]}" if not parts[0].startswith("docs/") else r)
+                normalized.append(
+                    f"docs/{parts[0]}.md#{parts[1]}" if not parts[0].startswith("docs/") else r
+                )
             else:
                 normalized.append(r if r.startswith("docs/") else f"docs/{r}")
         t["spec_refs"] = normalized

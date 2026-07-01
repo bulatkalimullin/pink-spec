@@ -1,10 +1,11 @@
 """LogBus — async broadcast of all WS events to connected clients + SQLite persistence."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -39,7 +40,7 @@ class LogBus:
         seq = self._next_seq(session_id)
         envelope = {
             "type": event_type,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "seq": seq,
             "session_id": session_id,
             "payload": payload,

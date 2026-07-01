@@ -1,8 +1,10 @@
 """Ollama LLM and embedding providers."""
+
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import structlog
@@ -59,16 +61,18 @@ class OllamaLLMProvider:
             },
             "keep_alive": self.keep_alive,
         }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    chunk = json.loads(line)
-                    content = chunk.get("message", {}).get("content")
-                    if content:
-                        yield content
+        async with (
+            httpx.AsyncClient(timeout=self._timeout) as client,
+            client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response,
+        ):
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                content = chunk.get("message", {}).get("content")
+                if content:
+                    yield content
 
 
 class OllamaEmbeddingProvider:

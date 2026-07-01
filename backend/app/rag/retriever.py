@@ -1,4 +1,5 @@
 """Simple retriever backed by ChromaDB (or BM25 keyword fallback)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +41,7 @@ class ChromaRetriever:
         )
         docs = results.get("documents", [[]])[0]
         distances = results.get("distances", [[]])[0]
-        return [{"text": doc, "distance": dist} for doc, dist in zip(docs, distances)]
+        return [{"text": doc, "distance": dist} for doc, dist in zip(docs, distances, strict=True)]
 
 
 class BM25Retriever:

@@ -1,4 +1,5 @@
 """API Designer agent — REST/WS contracts, OpenAPI spec, data models."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,7 +25,6 @@ class APIDesignerAgent(BaseAgent):
 
     async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         session_id = state["session_id"]
-        spec_level = state["spec_level"]
         rules = state["rules"]
 
         architecture_spec = state.get("artifacts", {}).get("architecture_spec", "")
@@ -49,19 +49,23 @@ class APIDesignerAgent(BaseAgent):
         await self._log(session_id, "info", "Designing API contracts and data models...")
         output = await self._llm.generate(messages)
 
-        await log_bus.emit(session_id, "artifact_preview", {
-            "artifact_type": "api_spec",
-            "chunk": output[:500],
-        })
+        await log_bus.emit(
+            session_id,
+            "artifact_preview",
+            {
+                "artifact_type": "api_spec",
+                "chunk": output[:500],
+            },
+        )
 
         assumptions = list(state.get("assumptions", []))
         for line in output.split("\n"):
             if "[ASSUMPTION]" in line:
                 text = line.replace("[ASSUMPTION]", "").strip()
                 assumptions.append(f"api_designer: {text}")
-                await log_bus.emit(session_id, "assumption_logged", {
-                    "text": text, "agent_id": self.agent_id
-                })
+                await log_bus.emit(
+                    session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
+                )
 
         new_outputs = {**state.get("agent_outputs", {}), "api_designer": output}
         new_artifacts = {

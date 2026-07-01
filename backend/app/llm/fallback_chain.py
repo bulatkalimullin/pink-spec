@@ -1,8 +1,9 @@
 """LLM fallback chain — tries Ollama models in order."""
+
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import structlog
 
@@ -21,7 +22,9 @@ class FallbackLLMChain:
         from app.services.log_bus import log_bus
 
         last_err: Exception | None = None
-        for i, (provider, model_id) in enumerate(zip(self._providers, self._model_ids)):
+        for i, (provider, model_id) in enumerate(
+            zip(self._providers, self._model_ids, strict=True)
+        ):
             try:
                 result = await provider.generate(messages, **kwargs)
                 if i > 0:
@@ -41,7 +44,7 @@ class FallbackLLMChain:
                 last_err = e
                 logger.warning("llm_attempt_failed", model=model_id, attempt=i, error=str(e))
                 if i < len(self._providers) - 1:
-                    backoff = min(2 ** i, 30)
+                    backoff = min(2**i, 30)
                     await asyncio.sleep(backoff)
 
         raise RuntimeError(f"All LLM providers failed. Last: {last_err}") from last_err
@@ -56,7 +59,9 @@ def build_fallback_chain(cfg: dict, session_id: str) -> FallbackLLMChain:
     from app.llm.ollama_provider import OllamaLLMProvider
 
     model_ids = [
-        m for m in [cfg.get("ollama_llm_model", "llama3.2"), *cfg.get("ollama_llm_fallbacks", [])] if m
+        m
+        for m in [cfg.get("ollama_llm_model", "llama3.2"), *cfg.get("ollama_llm_fallbacks", [])]
+        if m
     ]
     base_url = cfg.get("ollama_base_url", "http://localhost:11434")
 

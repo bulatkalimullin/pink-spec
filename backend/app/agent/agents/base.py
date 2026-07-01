@@ -1,4 +1,5 @@
 """Base class for all spec agents."""
+
 from __future__ import annotations
 
 import time
@@ -42,30 +43,42 @@ class BaseAgent:
             or _AGENT_NAMES.get(self.agent_id, self.agent_id)
         )
 
-        await log_bus.emit(session_id, "agent_started", {
-            "agent_id": run_id,
-            "agent_name": agent_name,
-            "pass_number": call_count,
-        })
+        await log_bus.emit(
+            session_id,
+            "agent_started",
+            {
+                "agent_id": run_id,
+                "agent_name": agent_name,
+                "pass_number": call_count,
+            },
+        )
 
         start = time.time()
         try:
             result = await self._execute(state)
             duration_ms = int((time.time() - start) * 1000)
-            await log_bus.emit(session_id, "agent_completed", {
-                "agent_id": run_id,
-                "duration_ms": duration_ms,
-                "status": "success",
-            })
+            await log_bus.emit(
+                session_id,
+                "agent_completed",
+                {
+                    "agent_id": run_id,
+                    "duration_ms": duration_ms,
+                    "status": "success",
+                },
+            )
             return result
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             logger.exception("agent_error", agent=self.agent_id, error=str(e))
-            await log_bus.emit(session_id, "agent_completed", {
-                "agent_id": run_id,
-                "duration_ms": duration_ms,
-                "status": "failed",
-            })
+            await log_bus.emit(
+                session_id,
+                "agent_completed",
+                {
+                    "agent_id": run_id,
+                    "duration_ms": duration_ms,
+                    "status": "failed",
+                },
+            )
             return {
                 **state,
                 "agent_outputs": {**state.get("agent_outputs", {}), run_id: "failed"},
@@ -100,16 +113,24 @@ class BaseAgent:
         return "\n".join(lines)
 
     async def _log(self, session_id: str, level: str, message: str) -> None:
-        await log_bus.emit(session_id, "log_entry", {
-            "level": level,
-            "agent_id": self.agent_id,
-            "message": message,
-        })
+        await log_bus.emit(
+            session_id,
+            "log_entry",
+            {
+                "level": level,
+                "agent_id": self.agent_id,
+                "message": message,
+            },
+        )
 
     async def _log_assumption(self, session_id: str, text: str) -> None:
         assumption = f"[ASSUMPTION] {self.agent_id}: {text}"
-        await log_bus.emit(session_id, "assumption_logged", {
-            "text": text,
-            "agent_id": self.agent_id,
-        })
+        await log_bus.emit(
+            session_id,
+            "assumption_logged",
+            {
+                "text": text,
+                "agent_id": self.agent_id,
+            },
+        )
         return assumption

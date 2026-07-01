@@ -1,4 +1,5 @@
 """Pipeline step models for dynamic spec generation."""
+
 from __future__ import annotations
 
 from typing import Any, Literal

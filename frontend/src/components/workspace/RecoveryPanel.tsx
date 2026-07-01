@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, RotateCcw, SkipForward, Download, RefreshCw } from "lucide-react";
+import { AlertTriangle, SkipForward, Download, RefreshCw } from "lucide-react";
 import { useSessionStore } from "@/stores/sessionStore";
 import { recoverSession, exportSession } from "@/lib/api";
 import { toast } from "sonner";

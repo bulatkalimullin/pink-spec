@@ -1,4 +1,5 @@
 """Reviewer agent — consistency, NFR, rules compliance."""
+
 from __future__ import annotations
 
 import json
@@ -64,26 +65,45 @@ class ReviewerAgent(BaseAgent):
             },
         ]
 
-        await self._log(session_id, "info", f"Running quality review (cycle #{state.get('review_cycles', 0) + 1})...")
+        await self._log(
+            session_id,
+            "info",
+            f"Running quality review (cycle #{state.get('review_cycles', 0) + 1})...",
+        )
         raw = await self._llm.generate(messages)
         report = _parse_report(raw)
 
         if not report:
-            await self._log(session_id, "warn", "Reviewer returned invalid JSON; assuming pass with low confidence")
-            report = {"passed": True, "confidence": 0.5, "rules_compliant": True, "issues": [], "suggestions": [], "summary": "Review parse error"}
+            await self._log(
+                session_id,
+                "warn",
+                "Reviewer returned invalid JSON; assuming pass with low confidence",
+            )
+            report = {
+                "passed": True,
+                "confidence": 0.5,
+                "rules_compliant": True,
+                "issues": [],
+                "suggestions": [],
+                "summary": "Review parse error",
+            }
 
         review_reports = [*state.get("review_reports", []), report]
         new_cycles = state.get("review_cycles", 0) + 1
 
-        await log_bus.emit(session_id, "log_entry", {
-            "level": "info" if report.get("passed") else "warn",
-            "agent_id": "reviewer",
-            "message": (
-                f"Review {'PASSED' if report.get('passed') else 'FAILED'} "
-                f"(confidence={report.get('confidence', 0):.2f}, "
-                f"issues={len(report.get('issues', []))})"
-            ),
-        })
+        await log_bus.emit(
+            session_id,
+            "log_entry",
+            {
+                "level": "info" if report.get("passed") else "warn",
+                "agent_id": "reviewer",
+                "message": (
+                    f"Review {'PASSED' if report.get('passed') else 'FAILED'} "
+                    f"(confidence={report.get('confidence', 0):.2f}, "
+                    f"issues={len(report.get('issues', []))})"
+                ),
+            },
+        )
 
         new_outputs = {**state.get("agent_outputs", {}), "reviewer": json.dumps(report)}
 

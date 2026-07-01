@@ -1,4 +1,5 @@
 """FastAPI application entry point."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,13 +8,13 @@ import structlog
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes import rag, schema, sessions, system
+from app.api.websocket import ws_session_handler
 from app.config import get_settings
 from app.db.connection import init_db
 from app.services.log_bus import log_bus
-from app.services.system_monitor import system_monitor
 from app.services.session_watchdog import watchdog
-from app.api.routes import sessions, system, rag, schema
-from app.api.websocket import ws_session_handler
+from app.services.system_monitor import system_monitor
 
 logger = structlog.get_logger(__name__)
 
@@ -55,7 +56,8 @@ async def startup():
     provider_cfg = settings.provider_cfg()
 
     try:
-        from app.llm.hf_provider import build_llm_provider, build_embedding_provider
+        from app.llm.hf_provider import build_embedding_provider, build_llm_provider
+
         llm_provider = build_llm_provider(provider_cfg)
         embedding_provider = build_embedding_provider(provider_cfg)
         logger.info("providers_ready", ollama_base_url=settings.ollama_base_url)

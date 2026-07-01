@@ -1,4 +1,5 @@
 """Generic specification agent — dynamic deliverable generation."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -35,9 +36,7 @@ class GenericSpecAgent(BaseAgent):
         context = self._build_context(state)
         rules_snapshot = self._rules_snapshot(state)
         artifacts = state.get("artifacts", {})
-        prior = "\n\n".join(
-            f"=== {k} ===\n{v[:1200]}" for k, v in artifacts.items() if v
-        )
+        prior = "\n\n".join(f"=== {k} ===\n{v[:1200]}" for k, v in artifacts.items() if v)
 
         output_lang = state["rules"].get("output", {}).get("language", "en")
 
@@ -60,15 +59,22 @@ class GenericSpecAgent(BaseAgent):
         await self._log(session_id, "info", f"Generating {name}...")
         output = await self._llm.generate(messages)
 
-        await log_bus.emit(session_id, "artifact_preview", {
-            "artifact_type": artifact_key,
-            "chunk": output[:500],
-        })
+        await log_bus.emit(
+            session_id,
+            "artifact_preview",
+            {
+                "artifact_type": artifact_key,
+                "chunk": output[:500],
+            },
+        )
 
         run_id = step_id
         return {
             **state,
-            "agent_outputs": {**state.get("agent_outputs", {}), run_id: output[:200] + "…" if len(output) > 200 else output},
+            "agent_outputs": {
+                **state.get("agent_outputs", {}),
+                run_id: output[:200] + "…" if len(output) > 200 else output,
+            },
             "artifacts": {**state.get("artifacts", {}), artifact_key: output},
             "current_agent": "supervisor",
             "current_step": None,

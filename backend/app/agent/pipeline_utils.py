@@ -1,32 +1,73 @@
 """Pipeline planning helpers and legacy sequence conversion."""
+
 from __future__ import annotations
 
 from typing import Any
-
-from app.schemas.pipeline import PipelineStep
 
 AGENT_SEQUENCE = {
     "L1": ["researcher", "product_analyst", "architect", "export"],
     "L2": ["researcher", "product_analyst", "architect", "task_decomposer", "reviewer", "export"],
     "L3": [
-        "researcher", "product_analyst", "architect", "api_designer", "ui_designer",
-        "context_manager", "task_decomposer", "reviewer", "export",
+        "researcher",
+        "product_analyst",
+        "architect",
+        "api_designer",
+        "ui_designer",
+        "context_manager",
+        "task_decomposer",
+        "reviewer",
+        "export",
     ],
     "L4": [
-        "researcher", "product_analyst", "architect", "api_designer", "ui_designer",
-        "context_manager", "task_decomposer", "reviewer", "export",
+        "researcher",
+        "product_analyst",
+        "architect",
+        "api_designer",
+        "ui_designer",
+        "context_manager",
+        "task_decomposer",
+        "reviewer",
+        "export",
     ],
 }
 
 BUILTIN_STEP_META: dict[str, dict[str, Any]] = {
     "researcher": {"name": "Researcher", "executor": "builtin:researcher", "artifact_key": None},
-    "pipeline_planner": {"name": "Pipeline Planner", "executor": "builtin:pipeline_planner", "artifact_key": None},
-    "product_analyst": {"name": "Product Specification", "executor": "builtin:product_analyst", "artifact_key": "product_spec"},
-    "architect": {"name": "Architecture", "executor": "builtin:architect", "artifact_key": "architecture_spec"},
-    "api_designer": {"name": "API Design", "executor": "builtin:api_designer", "artifact_key": "api_spec"},
-    "ui_designer": {"name": "UI Design", "executor": "builtin:ui_designer", "artifact_key": "ui_spec"},
-    "context_manager": {"name": "Context Manager", "executor": "builtin:context_manager", "artifact_key": None},
-    "task_decomposer": {"name": "Task Decomposition", "executor": "builtin:task_decomposer", "artifact_key": None},
+    "pipeline_planner": {
+        "name": "Pipeline Planner",
+        "executor": "builtin:pipeline_planner",
+        "artifact_key": None,
+    },
+    "product_analyst": {
+        "name": "Product Specification",
+        "executor": "builtin:product_analyst",
+        "artifact_key": "product_spec",
+    },
+    "architect": {
+        "name": "Architecture",
+        "executor": "builtin:architect",
+        "artifact_key": "architecture_spec",
+    },
+    "api_designer": {
+        "name": "API Design",
+        "executor": "builtin:api_designer",
+        "artifact_key": "api_spec",
+    },
+    "ui_designer": {
+        "name": "UI Design",
+        "executor": "builtin:ui_designer",
+        "artifact_key": "ui_spec",
+    },
+    "context_manager": {
+        "name": "Context Manager",
+        "executor": "builtin:context_manager",
+        "artifact_key": None,
+    },
+    "task_decomposer": {
+        "name": "Task Decomposition",
+        "executor": "builtin:task_decomposer",
+        "artifact_key": None,
+    },
     "reviewer": {"name": "Reviewer", "executor": "builtin:reviewer", "artifact_key": None},
     "export": {"name": "Export", "executor": "builtin:export", "artifact_key": None},
 }
@@ -112,7 +153,9 @@ def merge_deliverables_into_steps(
             if meta.get("artifact_key") == key:
                 skip_builtin.add(bid)
 
-    filtered = [s for s in steps if s["id"] not in skip_builtin and s.get("artifact_key") not in skip_keys]
+    filtered = [
+        s for s in steps if s["id"] not in skip_builtin and s.get("artifact_key") not in skip_keys
+    ]
 
     existing_keys = {s.get("artifact_key") for s in filtered if s.get("artifact_key")}
     for d in deliverables:

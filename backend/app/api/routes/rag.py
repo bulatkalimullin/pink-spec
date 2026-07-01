@@ -1,4 +1,5 @@
 """RAG document ingestion endpoint."""
+
 from __future__ import annotations
 
 import tempfile
@@ -28,14 +29,16 @@ async def ingest_document(session_id: str, file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
 
     try:
-        from app.llm.hf_provider import build_embedding_provider
-        from app.rag.retriever import ChromaRetriever, BM25Retriever
         from app.rag.ingest import ingest_sources
+        from app.rag.retriever import BM25Retriever, ChromaRetriever
 
         # Try to get embedding provider from app state
         try:
             from app.main import embedding_provider  # type: ignore
-            retriever = ChromaRetriever(session_id=session_id, embedding_provider=embedding_provider)
+
+            retriever = ChromaRetriever(
+                session_id=session_id, embedding_provider=embedding_provider
+            )
         except Exception:
             retriever = BM25Retriever()
 

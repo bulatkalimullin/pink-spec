@@ -57,10 +57,8 @@ export default function RulesEditor() {
   const navigate = useNavigate();
   const [value, setValue] = useState(JSON.stringify(DEFAULT_RULES, null, 2));
   const [error, setError] = useState<string | null>(null);
-  const [schema, setSchema] = useState<object | null>(null);
-
   useEffect(() => {
-    getRulesSchema().then(setSchema).catch(() => {});
+    void getRulesSchema().catch(() => {});
     try {
       const saved = localStorage.getItem("pink_spec_rules");
       if (saved) setValue(JSON.stringify(JSON.parse(saved), null, 2));

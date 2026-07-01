@@ -1,4 +1,5 @@
 """Product Analyst agent — personas, use cases, user stories, scope."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -63,10 +64,14 @@ class ProductAnalystAgent(BaseAgent):
         await self._log(session_id, "info", "Generating product specification...")
         output = await self._llm.generate(messages)
 
-        await log_bus.emit(session_id, "artifact_preview", {
-            "artifact_type": "product_spec",
-            "chunk": output[:500],
-        })
+        await log_bus.emit(
+            session_id,
+            "artifact_preview",
+            {
+                "artifact_type": "product_spec",
+                "chunk": output[:500],
+            },
+        )
 
         # Extract assumptions
         assumptions = list(state.get("assumptions", []))
@@ -74,9 +79,9 @@ class ProductAnalystAgent(BaseAgent):
             if "[ASSUMPTION]" in line:
                 text = line.replace("[ASSUMPTION]", "").strip()
                 assumptions.append(f"product_analyst: {text}")
-                await log_bus.emit(session_id, "assumption_logged", {
-                    "text": text, "agent_id": self.agent_id
-                })
+                await log_bus.emit(
+                    session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
+                )
 
         new_outputs = {**state.get("agent_outputs", {}), "product_analyst": output}
         new_artifacts = {**state.get("artifacts", {}), "product_spec": output}

@@ -1,8 +1,7 @@
 """Document ingestion pipeline: load → chunk → embed → store."""
+
 from __future__ import annotations
 
-import asyncio
-import re
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +25,7 @@ def load_file(path: Path) -> str:
             reader = pypdf.PdfReader(str(path))
             return "\n".join(page.extract_text() or "" for page in reader.pages)
         except ImportError:
-            raise RuntimeError("pypdf not installed; cannot ingest PDF")
+            raise RuntimeError("pypdf not installed; cannot ingest PDF") from None
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
@@ -44,7 +43,11 @@ def _split(text: str, chunk_size: int, overlap: int, separators: list[str]) -> l
         if s in text:
             sep = s
             break
-    parts = text.split(sep) if sep else [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+    parts = (
+        text.split(sep)
+        if sep
+        else [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+    )
     chunks: list[str] = []
     current = ""
     for part in parts:
@@ -85,7 +88,11 @@ async def ingest_sources(sources: list[str], retriever, session_id: str) -> dict
                 await log_bus.emit(
                     session_id,
                     "log_entry",
-                    {"level": "info", "agent_id": "rag", "message": f"Ingested {file_path.name} ({len(chunks)} chunks)"},
+                    {
+                        "level": "info",
+                        "agent_id": "rag",
+                        "message": f"Ingested {file_path.name} ({len(chunks)} chunks)",
+                    },
                 )
             except Exception as e:
                 files_failed += 1

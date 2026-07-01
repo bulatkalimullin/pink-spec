@@ -1,4 +1,5 @@
 """System resource monitor — broadcasts metrics via LogBus every N seconds."""
+
 from __future__ import annotations
 
 import asyncio
@@ -78,9 +79,7 @@ class SystemMonitor:
             # lazy import to avoid circular; log_bus is singleton
             from app.services.log_bus import log_bus
 
-            min_interval = min(
-                cfg.get("interval_sec", 3) for cfg in self._active_sessions.values()
-            )
+            min_interval = min(cfg.get("interval_sec", 3) for cfg in self._active_sessions.values())
             metrics = _collect_metrics()
 
             for session_id, cfg in list(self._active_sessions.items()):
@@ -94,8 +93,18 @@ async def _check_thresholds(session_id: str, metrics: dict, cfg: dict) -> None:
     from app.services.log_bus import log_bus
 
     checks = [
-        ("cpu_percent", "cpu_percent", cfg.get("warn_cpu_pct", 90), "Reduce parallel agents or switch to API mode"),
-        ("ram_percent", "ram_percent", cfg.get("warn_ram_pct", 85), "Enable context compression or switch to API mode"),
+        (
+            "cpu_percent",
+            "cpu_percent",
+            cfg.get("warn_cpu_pct", 90),
+            "Reduce parallel agents or switch to API mode",
+        ),
+        (
+            "ram_percent",
+            "ram_percent",
+            cfg.get("warn_ram_pct", 85),
+            "Enable context compression or switch to API mode",
+        ),
     ]
     if metrics.get("gpu") and cfg.get("warn_gpu_mem_pct"):
         gpu_pct = (
@@ -103,7 +112,14 @@ async def _check_thresholds(session_id: str, metrics: dict, cfg: dict) -> None:
             if metrics["gpu"]["mem_total_mb"] > 0
             else 0
         )
-        checks.append(("gpu_mem_percent", "gpu_mem_percent", cfg["warn_gpu_mem_pct"], "Reduce local model batch size"))
+        checks.append(
+            (
+                "gpu_mem_percent",
+                "gpu_mem_percent",
+                cfg["warn_gpu_mem_pct"],
+                "Reduce local model batch size",
+            )
+        )
         metrics["gpu_mem_percent"] = gpu_pct
 
     for key, label, threshold, hint in checks:

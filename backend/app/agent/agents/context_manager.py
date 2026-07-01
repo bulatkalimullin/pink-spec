@@ -1,4 +1,5 @@
 """Context Manager agent — summarization and context compression."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -36,13 +37,14 @@ class ContextManagerAgent(BaseAgent):
             return {**state, "current_agent": "supervisor"}
 
         agent_outputs = state.get("agent_outputs", {})
-        recent_outputs = "\n\n".join(
-            f"=== {k} ===\n{v[:600]}" for k, v in agent_outputs.items()
-        )
+        recent_outputs = "\n\n".join(f"=== {k} ===\n{v[:600]}" for k, v in agent_outputs.items())
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Summarize the following agent outputs:\n\n{recent_outputs}"},
+            {
+                "role": "user",
+                "content": f"Summarize the following agent outputs:\n\n{recent_outputs}",
+            },
         ]
 
         await self._log(session_id, "info", "Summarizing context...")
@@ -55,10 +57,15 @@ class ContextManagerAgent(BaseAgent):
         new_context["phase_summary"] = summary
 
         from app.services.log_bus import log_bus
-        await log_bus.emit(session_id, "summary_updated", {
-            "level": "phase",
-            "preview": summary[:200],
-        })
+
+        await log_bus.emit(
+            session_id,
+            "summary_updated",
+            {
+                "level": "phase",
+                "preview": summary[:200],
+            },
+        )
 
         new_outputs = {**state.get("agent_outputs", {}), "context_manager": "done"}
 
