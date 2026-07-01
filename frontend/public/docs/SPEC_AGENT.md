@@ -1,6 +1,6 @@
 # Pink Spec Agent — полная спецификация
 
-> Версия: 1.1 | Дата: 2026-07-01 | Статус: Source of Truth
+> Версия: 1.2 | Дата: 2026-07-01 | Статус: Source of Truth
 
 ## Оглавление
 
@@ -21,6 +21,8 @@
 15. [Fallback-стратегии](#15-fallback-стратегии)
 16. [Failure modes и Recovery](#16-failure-modes-и-recovery)
 17. [Безопасность и ограничения](#17-безопасность-и-ограничения)
+18. [Проекты, output и админка](#18-проекты-output-и-админка)
+19. [Статистика](#19-статистика)
 
 ---
 
@@ -35,6 +37,14 @@
 **Генерирует:**
 - Product spec, architecture spec, API/data model, UI spec, roadmap, риски, trade-offs
 - Папку `tasks/` с микро-задачами для поэтапной реализации
+- Артефакты на диске в `output/{output_slug}/` — человекочитаемое имя проекта (slug), не UUID
+
+**Идентификация:**
+| Поле | Назначение |
+|------|------------|
+| `session_id` | UUID — API, WebSocket, URL `/workspace/:id` |
+| `output_slug` | Имя папки на диске (`task-tracker`, `my-saas-app`) |
+| `project_name` | Отображаемое имя (из `rules.project.name` или idea) |
 
 **Ключевой принцип:** Supervisor контролирует глубину, агент документирует допущения, пользователь видит **каждый шаг** в Mission Control UI в реальном времени. Nothing Silent.
 
@@ -62,6 +72,20 @@
 | `cross_artifact_consistent` | 0 critical contradictions |
 | `saturation_done` | Saturation complete или fallback с ASSUMPTION |
 | `rules_compliant` | Все critical/high agent_rules проверены |
+
+### Минимальные требования L4 (`.env`)
+
+| Параметр | Рекомендация | Почему |
+|----------|--------------|--------|
+| `LLM_MAX_TOKENS` | ≥ 8192 | JSON batches (25 tasks) и exhaustive specs обрезаются при 2048 |
+| `OLLAMA_TIMEOUT_SEC` | ≥ 300 | Длинная генерация на локальной модели |
+| `OLLAMA_LLM_MODEL` | 7B+ (напр. `qwen2.5:7b`) | `gemma3:4b` часто даёт `completed_partial` |
+
+При `completed_partial` смотри `output/{output_slug}/gaps.md` (секция **Unmet L4 Criteria**) и событие `session_completed_partial` в Activity.
+
+### Patch-редактирование артефактов (refinement)
+
+Если файл уже есть в `output/{output_slug}/docs/`, повторный проход агента **не переписывает** документ целиком — LLM возвращает блоки `SEARCH/REPLACE`, которые применяются точечно. Событие `artifact_patched` в Activity показывает `+lines/-lines`. Настройка: `rules.artifacts.mode` = `auto` (default).
 
 ### Time budget по уровням
 
@@ -93,6 +117,8 @@
 | **Researcher** | RAG retrieval, domain research | `context_brief`, retrieved chunks |
 | **Reviewer** | Consistency, NFR, rules compliance | `review_report`, pass/fail |
 | **Context Manager** | Summarization, state compression, handoff | `session_summary`, `agent_handoff` |
+| **Intake** | Pre-flight: проверка достаточности idea до pipeline | batch `question_asked` или `intake_complete` |
+| **Pipeline Planner** | Динамический pipeline (L4 / auto mode) | `pipeline[]`, reasoning |
 
 ### Supervisor — поведение
 
@@ -192,30 +218,30 @@ seed_queries(idea)
 
 ### Структура вывода
 
+Имя папки: `output/{output_slug}/`, где `output_slug = slugify(rules.project.name)`; при пустом/`my-project` — из idea; при коллизии — суффикс `-2`, `-3`, …
+
 ```
-output/{session_id}/
+output/task-tracker/
 ├── manifest.json
-├── product_spec.md
-├── architecture_spec.md
-├── api_spec.openapi.yaml
-├── ui_spec.md
-├── data_model.md
-├── roadmap.md
-├── risk_register.md
-├── gaps.md            # при partial export
+├── gaps.md                  # при partial export
+├── docs/
+│   ├── product_spec.md
+│   ├── architecture_spec.md
+│   ├── api_spec.openapi.yaml
+│   ├── ui_spec.md
+│   ├── data_model.md
+│   ├── roadmap.md
+│   └── risk_register.md
 └── tasks/
     ├── TASK_INDEX.md
     ├── phase-01-foundation/
     │   ├── 001-init-repo.md
-    │   ├── 002-docker-compose.md
-    │   └── 003-env-config.md
-    ├── phase-02-backend/
-    │   ├── 010-fastapi-scaffold.md
-    │   └── 011-database-models.md
-    └── phase-03-frontend/
-        ├── 020-vite-setup.md
-        └── 021-shadcn-init.md
+    │   └── 002-docker-compose.md
+    └── phase-02-backend/
+        └── 010-fastapi-scaffold.md
 ```
+
+> **Миграция:** при старте backend папки `output/{uuid}` переименовываются в `output/{slug}` по `rules.project.name` / idea. `session_id` в manifest и API не меняется.
 
 ### Формат файла задачи (NNN-slug.md)
 
@@ -377,6 +403,16 @@ services:
     "max_raw_turns": 6,
     "compress_at_token_pct": 70
   },
+  "artifacts": {
+    "mode": "auto",
+    "max_patch_chars": 24000,
+    "patch_fallback_generate": false
+  },
+  "hitl": {
+    "enabled": true,
+    "intake_before_start": true,
+    "max_intake_questions": 8
+  },
   "monitoring": {
     "enabled": true,
     "interval_sec": 3,
@@ -400,9 +436,25 @@ services:
 
 **Приоритет правил:** `critical` > `high` > `medium` > `low`. Конфликты → `RuleConflictResolver` → `question_asked` → user pick → lock в manifest.
 
+**`project.name`:** задаёт `output_slug` и отображаемое имя. На Home — отдельное поле; если пусто — автослаг из idea.
+
+**`hitl.intake_before_start`:** до основного pipeline Intake Agent анализирует idea; при нехватке данных — batch-вопросы (`waiting_user`), pipeline стартует только после `POST .../answers/batch`.
+
 ---
 
 ## 9. LangGraph — оркестрация
+
+### Pre-flight Intake (до pipeline)
+
+```
+POST /start → run_graph
+  → IntakeAgent.analyze(idea, rules)
+  → ready? → supervisor loop
+  → questions? → status=waiting_user, emit intake_started + question_asked[]
+  → wait POST /answers/batch → merge clarifications в idea → running
+```
+
+Clarifications дописываются в `idea` блоком `[User clarifications]` для downstream-агентов.
 
 ### Global State
 
@@ -518,7 +570,18 @@ ingest(sources) → chunk(RecursiveCharacterTextSplitter)
 | GET | `/api/v1/sessions/{id}/supervisor` | Status report, agent, ETA |
 | GET | `/api/v1/sessions/{id}/tasks` | Tasks tree |
 | GET | `/api/v1/sessions/{id}/tasks/{task_id}` | Single task markdown |
-| POST | `/api/v1/sessions/{id}/answers` | HITL ответы |
+| POST | `/api/v1/sessions/{id}/answers` | HITL ответ (один вопрос) |
+| POST | `/api/v1/sessions/{id}/answers/batch` | Batch HITL — все ответы разом (intake) |
+| GET | `/api/v1/sessions/{id}/control` | L4 refinement settings + overrides |
+| POST | `/api/v1/sessions/{id}/control` | Live settings + pause/resume/cancel/force_export |
+| GET | `/api/v1/projects` | Список проектов (админка) |
+| GET | `/api/v1/projects/{session_id}` | Детали проекта |
+| DELETE | `/api/v1/projects/{session_id}` | Удалить артефакты + soft-delete; **stats сохраняются** |
+| POST | `/api/v1/projects/migrate-output` | Ручная миграция `output/{uuid}` → `{slug}` |
+| GET | `/api/v1/stats/global` | Агрегаты за всё время |
+| GET | `/api/v1/stats/sessions` | Список session_metrics |
+| GET | `/api/v1/stats/sessions/{id}` | Полный metrics_json |
+| POST | `/api/v1/stats/rebuild` | Backfill метрик |
 | GET | `/api/v1/sessions/{id}/artifacts/{type}` | Скачать артефакт |
 | GET | `/api/v1/sessions/{id}/health` | `{status, stuck_reason, recoverable}` |
 | POST | `/api/v1/sessions/{id}/resume` | Resume from checkpoint |
@@ -559,7 +622,15 @@ ingest(sources) → chunk(RecursiveCharacterTextSplitter)
 | `summary_updated` | info | `{level, preview}` |
 | `fallback_triggered` | warn | `{layer, step, message}` |
 | `assumption_logged` | warn | `{text, agent_id}` |
-| `question_asked` | info | `{question_id, text, options}` |
+| `question_asked` | info | `{question_id, text, options, priority}` |
+| `intake_started` | info | `{summary, questions[], questions_count}` |
+| `intake_waiting` | info | `{questions_count, resumed?}` |
+| `intake_complete` | info | `{ready, answers_count?, from_user?}` |
+| `artifact_patched` | info | `{artifact_type, mode, lines_added, lines_removed}` |
+| `stage_changed` | info | `{stage_id, label, percent, step_index, total_steps}` |
+| `pipeline_planned` | info | `{steps[], reasoning}` |
+| `session_completed_partial` | warn | `{failed_criteria[], criteria}` |
+| `refinement_settings` | info | overrides snapshot |
 | `completion_check` | info | `{criteria, all_met}` |
 | `budget_warning` | warn | `{remaining_sec, mode}` |
 | `artifact_preview` | info | `{artifact_type, chunk}` |
@@ -639,7 +710,10 @@ ingest(sources) → chunk(RecursiveCharacterTextSplitter)
 | `summary_updated` | Feed + Context panel | Expandable preview |
 | `fallback_triggered` | Feed + Fallbacks tab + toast warn | Chain history |
 | `assumption_logged` | Feed + Assumptions panel | Persistent list |
-| `question_asked` | Dialog + Feed + sidebar badge | Blocking |
+| `intake_started` / `intake_complete` | Questions panel + banner `waiting_user` | Блокирующий intake |
+| `artifact_patched` | Activity Feed | +lines/-lines |
+| `stage_changed` | SessionProgressBar | ETA / percent |
+| `question_asked` | HitlPanel (batch form) + Feed + sidebar badge | Blocking до batch submit |
 | `completion_check` | L4 checklist | Real-time ✓/✗ |
 | `budget_warning` | Feed + banner + toast | Remaining time |
 | `system_metrics` | Metrics bar + chart | — |
@@ -745,17 +819,21 @@ npx shadcn@latest add resizable table
 
 | Экран | Route | Функции |
 |-------|-------|---------|
-| Home | `/` | Idea input, Spec Level L1–L4 picker, preview |
+| Home | `/` | Idea + **название проекта** + Spec Level L1–L4 |
 | Rules Editor | `/rules` | Monaco JSON + live validation + presets |
 | Agent Workspace | `/workspace/:id` | Mission Control |
 | Artifacts Viewer | `/artifacts/:id` | Specs + Tasks + gaps.md |
+| **Projects Admin** | `/projects` | Список проектов, delete, export, links |
+| **Statistics** | `/statistics` | Global stats + session metrics |
 | Settings | `/settings` | Ollama URL, models, monitoring, resilience |
 
 ### 12.4 Frontend component map
 
 | Файл | Назначение |
 |------|------------|
-| `pages/Home.tsx` | Idea + spec level selector |
+| `pages/Home.tsx` | Idea + project name + spec level |
+| `pages/ProjectsAdmin.tsx` | Админка проектов (list/delete/export) |
+| `pages/Statistics.tsx` | Global + per-session metrics |
 | `pages/RulesEditor.tsx` | Monaco + validation |
 | `pages/AgentWorkspace.tsx` | Mission Control layout |
 | `pages/ArtifactsViewer.tsx` | Tabs viewer |
@@ -763,6 +841,9 @@ npx shadcn@latest add resizable table
 | `components/workspace/ActivityFeed.tsx` | Центральная лента |
 | `components/workspace/AgentTimeline.tsx` | All agents states |
 | `components/workspace/SupervisorCard.tsx` | ETA / L4 checklist |
+| `components/workspace/AgentControlPanel.tsx` | Пауза/cancel/L4 recovery |
+| `components/workspace/HitlPanel.tsx` | Batch intake questions |
+| `components/workspace/RefinementPanel.tsx` | L4 live settings (legacy embed) |
 | `components/workspace/RecoveryPanel.tsx` | Actions when stuck |
 | `components/observability/EventInspectorSheet.tsx` | Full payload |
 | `components/observability/NotificationCenter.tsx` | 🔔 dropdown |
@@ -790,6 +871,8 @@ npx shadcn@latest add resizable table
 ```json
 {
   "session_id": "uuid",
+  "output_slug": "task-tracker",
+  "project_name": "Task Tracker",
   "spec_level": "L3",
   "generated_at": "2026-06-30T12:34:56Z",
   "duration_sec": 1742,
@@ -853,6 +936,8 @@ pink-spec/
 │   │   ├── api/
 │   │   │   ├── routes/
 │   │   │   │   ├── sessions.py
+│   │   │   │   ├── projects.py
+│   │   │   │   ├── stats.py
 │   │   │   │   ├── rag.py
 │   │   │   │   ├── system.py
 │   │   │   │   └── schema.py
@@ -869,7 +954,9 @@ pink-spec/
 │   │   │   │   ├── task_decomposer.py
 │   │   │   │   ├── researcher.py
 │   │   │   │   ├── reviewer.py
-│   │   │   │   └── context_manager.py
+│   │   │   │   ├── context_manager.py
+│   │   │   │   ├── intake_agent.py
+│   │   │   │   └── pipeline_planner.py
 │   │   │   └── prompts/
 │   │   ├── llm/
 │   │   │   ├── ollama_provider.py
@@ -887,6 +974,14 @@ pink-spec/
 │   │   │   ├── session_watchdog.py
 │   │   │   ├── system_monitor.py
 │   │   │   ├── session.py
+│   │   │   ├── projects.py
+│   │   │   ├── output_paths.py
+│   │   │   ├── output_migration.py
+│   │   │   ├── intake.py
+│   │   │   ├── artifact_patcher.py
+│   │   │   ├── artifact_store.py
+│   │   │   ├── stats_collector.py
+│   │   │   ├── stats_aggregator.py
 │   │   │   └── export.py
 │   │   └── db/
 │   │       ├── models.py
@@ -924,8 +1019,8 @@ pink-spec/
 │       ├── task.md
 │       └── TASK_INDEX.md
 ├── models/                      # документация по Ollama-моделям (README)
-├── output/                      # gitignored
-├── data/                        # vectors, gitignored
+├── output/                      # gitignored; bind mount ./output в Docker
+├── data/                        # SQLite + vectors, gitignored
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -981,11 +1076,13 @@ WebSocket → SSE (`/api/v1/sessions/{id}/stream`) → polling REST каждые
 
 ```
 pending → running ↔ paused
+running → waiting_user (intake) → running
 running → waiting_user ↔ stuck
 running → degraded → completed_partial
 running → completed
 stuck → failed (unrecoverable)
 stuck → completed_partial (force export)
+* → archived (DELETE /projects/{id}, soft-delete)
 ```
 
 ### Каталог сценариев
@@ -1025,7 +1122,8 @@ stuck → completed_partial (force export)
 
 | Сценарий | Detection | Recovery |
 |----------|-----------|----------|
-| User не отвечает | `hitl_timeout_sec` (3600) | Reminder toast → ASSUMPTION default → continue |
+| Intake — нехватка контекста | `intake_started` + N questions | `waiting_user` → batch answers → pipeline |
+| User не отвечает (intake) | `hitl_timeout_sec` | Proceed с partial answers или timeout warn |
 | User cancel | WS message | Stop after current agent → partial export |
 | Tab closed | WS disconnect | Session continues; checkpoint; resume on reconnect |
 | Duplicate start | Idempotency key | Reject or attach to existing run |
@@ -1051,7 +1149,7 @@ stuck → completed_partial (force export)
 ### Checkpoint & Resume
 
 - После каждого агента (L3/L4): persist `MultiAgentState` → SQLite `session_checkpoints`
-- Artifacts flushed to `output/{session_id}/`
+- Artifacts flushed to `output/{output_slug}/` (резолв через `session_id` → slug cache)
 - On reconnect: `session_snapshot` + `resume_from_checkpoint`
 
 ### Recovery actions (via REST)
@@ -1059,8 +1157,18 @@ stuck → completed_partial (force export)
 ```
 POST /sessions/{id}/recover
 {
-  "action": "retry_agent" | "skip_agent" | "force_export" | "restart_from",
+  "action": "retry_agent" | "skip_agent" | "force_export" | "restart_from"
+        | "replan_pipeline" | "retry_tasks" | "retry_reviewer",
   "target_agent": "architect"  // optional
+}
+
+POST /sessions/{id}/control
+{
+  "action": "pause" | "resume" | "cancel" | "force_export"
+        | "replan_pipeline" | "retry_tasks" | "retry_reviewer",
+  "max_review_cycles": 15,
+  "completion_confidence": 0.9,
+  "until_confident": true
 }
 ```
 
@@ -1076,3 +1184,78 @@ POST /sessions/{id}/recover
 - Sandbox: агент НЕ исполняет код — только документы
 - Rate limit на `/start`: 5 req/min локально
 - Idempotency key на `/start` для предотвращения дублей
+
+---
+
+## 18. Проекты, output и админка
+
+### Модель данных (SQLite `sessions`)
+
+| Колонка | Описание |
+|---------|----------|
+| `id` | `session_id` (UUID, PK) |
+| `output_slug` | UNIQUE — имя папки в `output/` |
+| `project_name` | Человекочитаемое имя |
+| `deleted_at` | NULL = активен; иначе soft-delete (архив) |
+| `status` | `pending` … `archived` |
+
+`session_metrics` **не имеет FK** на `sessions` — метрики переживают удаление проекта.
+
+### Резолв путей
+
+```python
+# backend/app/services/export.py
+def session_output_dir(session_id: str) -> Path:
+    slug = get_output_slug(session_id)  # cache + DB; fallback: session_id
+    return OUTPUT_ROOT / slug
+```
+
+Сервис: `backend/app/services/output_paths.py` — `slugify_project_name`, `allocate_output_slug`, `resolve_project_name`.
+
+### Создание сессии
+
+1. `POST /sessions` → вычислить `project_name` + `output_slug`, INSERT в БД, `mkdir output/{slug}`
+2. `POST /sessions/{id}/start` → graph (intake → pipeline)
+3. API/WS по-прежнему используют `session_id`
+
+### Удаление проекта (`DELETE /api/v1/projects/{session_id}`)
+
+| Шаг | Действие |
+|-----|----------|
+| 1 | 409 если `running` / `waiting_user` |
+| 2 | `shutil.rmtree(output/{output_slug})` |
+| 3 | DELETE logs, checkpoints, open_questions |
+| 4 | `UPDATE sessions SET deleted_at=now(), status='archived'` |
+| 5 | **Не трогать** `session_metrics` |
+| 6 | Очистить runtime: runner, watchdog, intake events |
+
+UI: `/projects` — таблица с Open / Artifacts / ZIP / Delete (confirm).
+
+### Миграция legacy
+
+При startup: `migrate_output_folders()` — для сессий без `output_slug` переименовать `output/{uuid}` → `output/{slug}`. Ручной запуск: `POST /api/v1/projects/migrate-output`.
+
+---
+
+## 19. Статистика
+
+Метрики собираются в `session_metrics` при завершении graph (`collect_and_persist_metrics`). Агрегаты — `global_stats` (singleton).
+
+### Поля в `metrics_json` (денормализация)
+
+- `project_name`, `output_slug`, `idea_preview` — отображение после soft-delete
+- `scores`: `quality_score`, `efficiency_score`, `reliability_score`
+- counts: artifacts, tasks, errors, fallbacks, agent_calls, …
+
+### API
+
+| Method | Path | Описание |
+|--------|------|----------|
+| GET | `/api/v1/stats/global` | totals, rates, trends, agent_leaderboard |
+| GET | `/api/v1/stats/sessions` | paginated summaries (`project_name` в ответе) |
+| GET | `/api/v1/stats/sessions/{id}` | full metrics_json |
+| POST | `/api/v1/stats/rebuild` | backfill для сессий без metrics row |
+
+UI: `/statistics` — карточки, графики, `RecentSessionsTable` с колонкой **Проект**.
+
+**Важно:** удаление проекта через админку **не уменьшает** счётчики в global stats.
