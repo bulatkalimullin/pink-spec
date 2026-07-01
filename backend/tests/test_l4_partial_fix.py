@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.agent.agents.base import BaseAgent
 from app.agent.l4_guards import apply_l4_runtime_guards, is_small_llm_model
 from app.agent.state import initial_state
@@ -47,6 +49,38 @@ def test_llm_kwargs_from_rules():
     assert kwargs["max_tokens"] == 8192
     assert kwargs["temperature"] == 0.1
     assert kwargs["timeout_sec"] == 300
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_patched_applies_and_emits(tmp_path, monkeypatch):
+    from app.services import export as export_mod
+    from app.services.artifact_store import init_session_output, read_artifact, save_artifact_patched
+
+    session_id = "patch-test-session"
+
+    async def noop_save_manifest(_sid: str, _manifest: dict) -> None:
+        pass
+
+    monkeypatch.setattr(export_mod, "OUTPUT_ROOT", tmp_path)
+    monkeypatch.setattr("app.services.artifact_store.save_manifest", noop_save_manifest)
+
+    init_session_output(session_id)
+    from app.services.export import write_artifact
+
+    write_artifact(session_id, "product_spec", "# Title\n\nold paragraph\n")
+
+    raw = """<<<<<<< SEARCH
+old paragraph
+=======
+new paragraph
+>>>>>>> REPLACE"""
+    placeholder, result, mode = await save_artifact_patched(session_id, "product_spec", raw)
+    assert mode == "patch"
+    assert result.applied == 1
+    assert "<" in placeholder and "chars>" in placeholder
+    content = read_artifact(session_id, "product_spec")
+    assert "new paragraph" in content
+    assert "old paragraph" not in content
 
 
 def test_write_gaps_includes_l4_criteria(tmp_path, monkeypatch):

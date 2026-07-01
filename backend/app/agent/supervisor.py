@@ -17,7 +17,7 @@ from app.agent.pipeline_utils import (
     step_builtin_agent_id,
 )
 from app.agent.state import MultiAgentState
-from app.services.artifact_store import artifact_exists, remove_artifact
+from app.services.artifact_store import artifact_exists
 from app.services.log_bus import log_bus
 from app.services.session_control import reset_task_decomposer_steps
 
@@ -26,6 +26,84 @@ logger = structlog.get_logger(__name__)
 ANTI_LOOP_LIMIT = 5
 ANTI_LOOP_LIMIT_L4 = 15
 MAX_REVIEW_CYCLES_DEFAULT = 10
+PATCH_UNCHANGED_LIMIT_DEFAULT = 2
+REVIEW_PLATEAU_WINDOW_DEFAULT = 3
+
+
+def patch_unchanged_limit(state: MultiAgentState) -> int:
+    return int(
+        state.get("rules", {})
+        .get("resilience", {})
+        .get("patch_unchanged_limit", PATCH_UNCHANGED_LIMIT_DEFAULT)
+    )
+
+
+def review_plateau_window(state: MultiAgentState) -> int:
+    return int(
+        state.get("rules", {})
+        .get("resilience", {})
+        .get("review_plateau_window", REVIEW_PLATEAU_WINDOW_DEFAULT)
+    )
+
+
+def is_artifact_patch_exhausted(state: MultiAgentState, artifact_key: str) -> bool:
+    counts = state.get("patch_unchanged_counts") or {}
+    return counts.get(artifact_key, 0) >= patch_unchanged_limit(state)
+
+
+def update_patch_unchanged_counts(
+    state: MultiAgentState, artifact_key: str, mode: str
+) -> dict[str, int]:
+    counts = dict(state.get("patch_unchanged_counts") or {})
+    if mode in ("patch", "generate"):
+        counts.pop(artifact_key, None)
+    elif mode == "unchanged":
+        counts[artifact_key] = counts.get(artifact_key, 0) + 1
+    return counts
+
+
+def artifact_keys_from_report(report: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for issue in report.get("issues", []):
+        key = _parse_artifact_key(issue.get("location", ""))
+        if key:
+            keys.add(key)
+    return keys
+
+
+def review_confidence_plateau(
+    reports: list[dict[str, Any]], window: int = REVIEW_PLATEAU_WINDOW_DEFAULT
+) -> bool:
+    if len(reports) < window:
+        return False
+    recent = reports[-window:]
+    confidences = [r.get("confidence") for r in recent]
+    if len(set(confidences)) != 1:
+        return False
+    return not recent[-1].get("passed", False)
+
+
+def review_issues_plateau(
+    reports: list[dict[str, Any]], window: int = REVIEW_PLATEAU_WINDOW_DEFAULT
+) -> bool:
+    """True when the last N reviews repeat the same issue descriptions."""
+    if len(reports) < window:
+        return False
+    recent = reports[-window:]
+    if any(r.get("passed") for r in recent):
+        return False
+
+    def _issue_fingerprint(report: dict[str, Any]) -> frozenset[str]:
+        return frozenset(
+            issue.get("description", "").strip().lower()
+            for issue in report.get("issues", [])
+            if issue.get("description")
+        )
+
+    fingerprints = [_issue_fingerprint(r) for r in recent]
+    if not fingerprints[0]:
+        return False
+    return len({fp for fp in fingerprints}) == 1
 
 
 def anti_loop_limit(spec_level: str) -> int:
@@ -166,6 +244,42 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
         return {"current_agent": "export", "status": "degraded"}
 
     if until_confident and not confident_enough:
+        plateau_window = review_plateau_window(state)
+        if review_confidence_plateau(review_reports, plateau_window) or review_issues_plateau(
+            review_reports, plateau_window
+        ):
+            await log_bus.emit(
+                session_id,
+                "log_entry",
+                {
+                    "level": "warn",
+                    "agent_id": "supervisor",
+                    "message": (
+                        f"Review plateau ({confidence:.2f} for {plateau_window} cycles, "
+                        "repeated issues). Exporting partial with gaps.md."
+                    ),
+                },
+            )
+            return {
+                **state,
+                "current_agent": "export",
+                "status": "degraded",
+                "_review_plateau": True,
+            }
+
+        flagged = artifact_keys_from_report(last_report)
+        if flagged and all(is_artifact_patch_exhausted(state, k) for k in flagged):
+            await log_bus.emit(
+                session_id,
+                "log_entry",
+                {
+                    "level": "warn",
+                    "agent_id": "supervisor",
+                    "message": "Patch exhausted for all flagged artifacts. Exporting partial.",
+                },
+            )
+            return {"current_agent": "export", "status": "degraded"}
+
         updated = apply_refinement(state, last_report, criteria)
     elif not criteria.get("tasks_coverage"):
         updated = reset_task_decomposer_steps(state)
@@ -174,6 +288,8 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
 
     updated = ensure_task_coverage(updated)
 
+    issue_count = len(last_report.get("issues", []))
+    artifact_count = len(updated.get("refinement_issues") or {})
     await log_bus.emit(
         session_id,
         "log_entry",
@@ -182,7 +298,8 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
             "agent_id": "supervisor",
             "message": (
                 f"L4 refinement cycle #{updated.get('review_cycles', 0)}: "
-                f"re-running steps (confidence={confidence:.2f}, need {min_confidence:.2f})"
+                f"batch patch {issue_count} issue(s) across {artifact_count} artifact(s) "
+                f"(confidence={confidence:.2f}, need {min_confidence:.2f})"
             ),
         },
     )
@@ -271,30 +388,30 @@ def _step_done(outputs: dict[str, Any], step_id: str) -> bool:
     return True
 
 
+def _group_issues_by_artifact(issues: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for issue in issues:
+        key = _parse_artifact_key(issue.get("location", ""))
+        if key:
+            grouped.setdefault(key, []).append(issue)
+    return grouped
+
+
 def apply_refinement(
     state: MultiAgentState,
     report: dict[str, Any],
     criteria: dict[str, bool] | None = None,
 ) -> MultiAgentState:
-    """Clear outputs for artifacts that failed review so they can be regenerated."""
+    """Queue batch patch refinement — one fixer agent patches all flagged artifacts."""
     criteria = criteria or {}
     issues = report.get("issues", [])
-    artifact_keys: set[str] = set()
-
-    for issue in issues:
-        loc = issue.get("location", "")
-        key = _parse_artifact_key(loc)
-        if key:
-            artifact_keys.add(key)
+    grouped = _group_issues_by_artifact(issues)
+    artifact_keys: set[str] = set(grouped.keys())
 
     pipeline = state.get("pipeline") or []
-    step_ids_to_clear: list[str] = []
-    keys_to_clear: set[str] = set()
 
     if not artifact_keys and not criteria.get("tasks_coverage", True):
-        for step in pipeline:
-            if step_builtin_agent_id(step) == "task_decomposer":
-                step_ids_to_clear.append(step["id"])
+        return state
 
     if not artifact_keys and not report.get("passed", True):
         artifact_keys = {
@@ -304,43 +421,34 @@ def apply_refinement(
             and step_builtin_agent_id(s) not in ("task_decomposer", "reviewer", "context_manager")
         }
         artifact_keys.discard(None)
+        for key in artifact_keys:
+            grouped.setdefault(key, issues)
 
-    for step in pipeline:
-        ak = step.get("artifact_key")
-        if ak and ak in artifact_keys:
-            step_ids_to_clear.append(step["id"])
-            keys_to_clear.add(ak)
-
-    if not step_ids_to_clear and not report.get("passed", True):
-        for step in pipeline:
-            bid = step_builtin_agent_id(step)
-            if bid in ("task_decomposer", "reviewer", "context_manager", "pipeline_planner"):
-                continue
-            if step.get("artifact_key") or bid in (
-                "product_analyst",
-                "architect",
-                "api_designer",
-                "ui_designer",
-            ):
-                step_ids_to_clear.append(step["id"])
-                if step.get("artifact_key"):
-                    keys_to_clear.add(step["artifact_key"])
+    refinement_issues = dict(state.get("refinement_issues") or {})
+    for key in artifact_keys:
+        if key in grouped:
+            refinement_issues[key] = grouped[key]
+        else:
+            refinement_issues[key] = [
+                {
+                    "severity": "medium",
+                    "description": report.get("summary", "Improve quality per reviewer feedback"),
+                    "location": f"{key}#general",
+                }
+            ]
 
     outputs = dict(state.get("agent_outputs", {}))
-    artifacts = dict(state.get("artifacts", {}))
-    session_id = state["session_id"]
-
-    for sid in step_ids_to_clear:
-        outputs.pop(sid, None)
-    for k in keys_to_clear:
-        artifacts.pop(k, None)
-        remove_artifact(session_id, k)
-
+    outputs.pop("refinement_fixer", None)
     reviewer_steps = [s["id"] for s in pipeline if step_builtin_agent_id(s) == "reviewer"]
     for rid in reviewer_steps:
         outputs.pop(rid, None)
 
-    return {**state, "agent_outputs": outputs, "artifacts": artifacts}
+    return {
+        **state,
+        "agent_outputs": outputs,
+        "refinement_issues": refinement_issues,
+        "refinement_pending": bool(artifact_keys),
+    }
 
 
 def check_l4_criteria(state: MultiAgentState) -> dict[str, bool]:
@@ -400,6 +508,9 @@ def _find_step(state: MultiAgentState, step_id: str) -> dict[str, Any] | None:
 
 def _route_next(state: MultiAgentState) -> str:
     outputs = state.get("agent_outputs", {})
+    if state.get("refinement_pending") and not _step_done(outputs, "refinement_fixer"):
+        return "refinement_fixer"
+
     sequence = _get_sequence(state)
 
     for step_id in sequence:
@@ -440,6 +551,10 @@ def _skip_to_next(
 
 
 def _routing_reason(state: MultiAgentState, next_agent: str) -> str:
+    if next_agent == "refinement_fixer":
+        issues = state.get("refinement_issues") or {}
+        n_issues = sum(len(v) for v in issues.values())
+        return f"Batch patch refinement ({len(issues)} artifacts, {n_issues} issues)"
     step = _find_step(state, next_agent)
     if step:
         return f"{step.get('name', next_agent)} pending"

@@ -8,7 +8,12 @@ from app.agent.pipeline_utils import (
     merge_tasks,
     normalize_pipeline_steps,
 )
-from app.agent.supervisor import apply_refinement, check_l4_criteria, ensure_task_coverage
+from app.agent.supervisor import (
+    _route_next,
+    apply_refinement,
+    check_l4_criteria,
+    ensure_task_coverage,
+)
 
 
 def test_normalize_pipeline_steps_preserves_unique_ids():
@@ -126,7 +131,7 @@ def test_check_l4_criteria_tasks_coverage():
     assert criteria["tasks_coverage"] is True
 
 
-def test_apply_refinement_clears_failed_artifacts(tmp_path, monkeypatch):
+def test_apply_refinement_queues_batch_patch_without_rerunning_generators(tmp_path, monkeypatch):
     from app.services import export as export_mod
 
     monkeypatch.setattr(export_mod, "OUTPUT_ROOT", tmp_path)
@@ -156,6 +161,8 @@ def test_apply_refinement_clears_failed_artifacts(tmp_path, monkeypatch):
             "product_spec": "<3 chars>",
             "architecture_spec": "<4 chars>",
         },
+        "refinement_issues": {},
+        "refinement_pending": False,
     }
     from app.services.export import write_artifact
 
@@ -164,15 +171,29 @@ def test_apply_refinement_clears_failed_artifacts(tmp_path, monkeypatch):
 
     report = {
         "passed": False,
-        "issues": [{"location": "product_spec#scope", "severity": "critical"}],
+        "issues": [{"location": "product_spec#scope", "severity": "critical", "description": "fix scope"}],
     }
     updated = apply_refinement(state, report, {"tasks_coverage": True})
-    assert "product_analyst" not in updated["agent_outputs"]
+    assert "product_analyst" in updated["agent_outputs"]
     assert "architect" in updated["agent_outputs"]
-    assert "product_spec" not in updated["artifacts"]
     assert "reviewer" not in updated["agent_outputs"]
-    assert not (tmp_path / session_id / "docs" / "product_spec.md").is_file()
+    assert "refinement_fixer" not in updated["agent_outputs"]
+    assert updated["refinement_pending"] is True
+    assert "product_spec" in updated["artifacts"]
+    assert (tmp_path / session_id / "docs" / "product_spec.md").is_file()
     assert (tmp_path / session_id / "docs" / "architecture_spec.md").is_file()
+    assert "product_spec" in updated["refinement_issues"]
+    assert updated["refinement_issues"]["product_spec"][0]["description"] == "fix scope"
+
+
+def test_route_next_prefers_refinement_fixer_when_pending():
+    state = {
+        "pipeline": [{"id": "reviewer", "executor": "builtin:reviewer"}],
+        "agent_outputs": {"product_analyst": "done", "reviewer": "done"},
+        "refinement_pending": True,
+        "spec_level": "L4",
+    }
+    assert _route_next(state) == "refinement_fixer"
 
 
 def test_ensure_task_coverage_appends_batch():

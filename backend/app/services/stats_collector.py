@@ -263,11 +263,22 @@ def build_metrics_from_state(
     )
 
     pipeline_cfg = rules.get("pipeline") or {}
+    project = rules.get("project") or {}
+    project_name = state.get("project_name") or project.get("name")
+    output_slug = state.get("output_slug")
+    if not output_slug and state.get("session_id"):
+        from app.services.output_paths import get_output_slug
+
+        output_slug = get_output_slug(state["session_id"])
+    idea_text = state.get("idea") or ""
 
     return {
         "session_id": state.get("session_id"),
         "status": status,
         "spec_level": spec_level,
+        "project_name": project_name,
+        "output_slug": output_slug,
+        "idea_preview": idea_text[:120],
         "is_partial": is_partial,
         "duration_sec": round(float(duration_sec), 1),
         "time_budget_sec": time_budget,
@@ -318,7 +329,9 @@ def build_metrics_from_state(
 
 
 def _load_manifest_from_disk(session_id: str) -> dict | None:
-    path = Path(get_settings().output_path) / session_id / "manifest.json"
+    from app.services.output_paths import get_output_slug
+
+    path = Path(get_settings().output_path) / get_output_slug(session_id) / "manifest.json"
     if not path.exists():
         return None
     try:
@@ -351,6 +364,8 @@ def _state_from_manifest_and_session(
     return {
         "session_id": session_id,
         "idea": session_row.get("idea", ""),
+        "project_name": session_row.get("project_name"),
+        "output_slug": session_row.get("output_slug"),
         "rules": rules,
         "spec_level": spec_level,
         "status": status,

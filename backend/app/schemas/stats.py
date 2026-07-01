@@ -14,6 +14,8 @@ class SessionMetricsSummary(BaseModel):
     completed_at: str
     duration_sec: float
     quality_score: float
+    project_name: str | None = None
+    output_slug: str | None = None
     artifacts_count: int = 0
     tasks_total: int = 0
     errors_count: int = 0

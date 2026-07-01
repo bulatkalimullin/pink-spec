@@ -24,7 +24,9 @@ class ChromaRetriever:
         self._col = self._client.get_or_create_collection(self._collection_name)
 
     async def add_texts(self, texts: list[str], metadatas: list[dict] | None = None) -> None:
-        vecs = await self._embedding_provider.embed_documents(texts)
+        from app.services.artifact_quality import normalize_embedding_rows
+
+        vecs = normalize_embedding_rows(await self._embedding_provider.embed_documents(texts))
         ids = [str(i) for i in range(self._col.count(), self._col.count() + len(texts))]
         self._col.add(
             embeddings=vecs,
@@ -34,7 +36,9 @@ class ChromaRetriever:
         )
 
     async def retrieve(self, query: str, top_k: int = 8) -> list[dict[str, Any]]:
-        vec = await self._embedding_provider.embed_query(query)
+        from app.services.artifact_quality import normalize_embedding_vector
+
+        vec = normalize_embedding_vector(await self._embedding_provider.embed_query(query))
         results = self._col.query(
             query_embeddings=[vec],
             n_results=min(top_k, max(1, self._col.count())),

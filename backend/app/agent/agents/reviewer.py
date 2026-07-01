@@ -8,7 +8,13 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
+from app.services.artifact_quality import load_existing_artifact_texts
 from app.services.artifact_store import summarize_artifacts
+from app.services.language_validator import (
+    output_language_instruction,
+    should_validate_language,
+    validate_artifacts_language,
+)
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior engineering reviewer. Perform a quality review of all generated specifications.
@@ -19,6 +25,7 @@ Review for:
 3. Rules compliance (all critical/high agent_rules are respected)
 4. Completeness (no critical gaps)
 5. Feasibility (realistic for stated timeline and budget)
+6. Language compliance — prose must match the configured output language; technology names, API paths, statuses, and code stay untranslated
 
 Output JSON:
 {
@@ -48,12 +55,14 @@ class ReviewerAgent(BaseAgent):
         agent_rules = rules.get("agent_rules", [])
         high_rules = [r for r in agent_rules if r.get("priority") in ("critical", "high")]
         assumptions = state.get("assumptions", [])
+        lang_block = output_language_instruction(rules)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": (
+                    f"{lang_block}\n"
                     f"NFR requirements: {json.dumps(nfr)}\n"
                     f"Critical/High rules: {json.dumps(high_rules)}\n"
                     f"Assumptions made: {json.dumps(assumptions[:20])}\n\n"
@@ -90,6 +99,16 @@ class ReviewerAgent(BaseAgent):
                 "suggestions": ["Re-run review after artifacts are regenerated"],
                 "summary": "Review parse error",
             }
+
+        if should_validate_language(rules):
+            expected_lang = str((rules.get("output") or {}).get("language", "en"))
+            artifact_texts = load_existing_artifact_texts(session_id)
+            lang_issues = validate_artifacts_language(artifact_texts, expected_lang)
+            if lang_issues:
+                report["issues"] = [*lang_issues, *report.get("issues", [])]
+                report["passed"] = False
+                if report.get("rules_compliant", True):
+                    report["rules_compliant"] = False
 
         review_reports = [*state.get("review_reports", []), report]
         new_cycles = state.get("review_cycles", 0) + 1

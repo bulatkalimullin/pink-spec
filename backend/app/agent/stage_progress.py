@@ -222,6 +222,8 @@ def generate_label_for_agent(state: MultiAgentState, agent_id: str, agent_name: 
         return STAGE_LABELS_RU["summarize"]
     if builtin == "reviewer":
         return STAGE_LABELS_RU["validate"]
+    if agent_id == "refinement_fixer":
+        return "Патчим по review"
     if builtin == "export" or agent_id == "export":
         return STAGE_LABELS_RU["export"]
     if step and step.get("executor") == "generic":

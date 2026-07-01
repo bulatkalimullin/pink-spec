@@ -33,6 +33,8 @@ def _summary_from_row(row: dict) -> dict[str, Any]:
         "completed_at": row["completed_at"],
         "duration_sec": row["duration_sec"],
         "quality_score": row["quality_score"],
+        "project_name": metrics.get("project_name"),
+        "output_slug": metrics.get("output_slug"),
         "artifacts_count": metrics.get("artifacts_count", 0),
         "tasks_total": metrics.get("tasks_total", 0),
         "errors_count": metrics.get("errors_count", 0),

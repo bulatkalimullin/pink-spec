@@ -71,7 +71,7 @@ class SessionState:
 
     def is_stuck(self) -> bool:
         """True when no progress for stuck_detection_sec while session is active."""
-        if self.status in ("failed", "paused", "completed", "completed_partial"):
+        if self.status in ("failed", "paused", "completed", "completed_partial", "waiting_user"):
             return False
         if self.status == "stuck":
             return True
