@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import { ArrowLeft, Check, AlertTriangle } from "lucide-react";
+import LanguageSelector from "@/components/LanguageSelector";
+import { useI18n } from "@/i18n/I18nProvider";
 import { getRulesSchema } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -16,7 +18,13 @@ const DEFAULT_RULES = {
     timeline_weeks: 8,
   },
   nfr: {},
-  output: { language: "en", format: "markdown", include_diagrams: true },
+  output: {
+    language: "en",
+    ui_language: "en",
+    validate_language: true,
+    format: "markdown",
+    include_diagrams: true,
+  },
   agent_rules: [],
   ollama: {
     llm_model: "gemma3:4b",
@@ -66,6 +74,7 @@ const DEFAULT_RULES = {
 
 export default function RulesEditor() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [value, setValue] = useState(JSON.stringify(DEFAULT_RULES, null, 2));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -93,9 +102,9 @@ export default function RulesEditor() {
     try {
       const parsed = JSON.parse(value);
       localStorage.setItem("pink_spec_rules", JSON.stringify(parsed));
-      toast.success("Rules saved to local storage");
-    } catch (e) {
-      toast.error("Invalid JSON");
+      toast.success(t.rules.saved);
+    } catch {
+      toast.error(t.rules.invalidJson);
     }
   };
 
@@ -108,10 +117,11 @@ export default function RulesEditor() {
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back
+          {t.nav.back}
         </button>
         <span className="text-border">|</span>
-        <span className="text-sm font-semibold">Rules Editor</span>
+        <span className="text-sm font-semibold">{t.rules.title}</span>
+        <LanguageSelector compact />
         <div className="flex-1" />
         {error ? (
           <span className="flex items-center gap-1.5 text-xs text-red-400 max-w-[40%] truncate sm:max-w-none">
@@ -121,7 +131,7 @@ export default function RulesEditor() {
         ) : (
           <span className="hidden items-center gap-1.5 text-xs text-emerald-400 sm:flex">
             <Check className="h-3.5 w-3.5" />
-            Valid JSON
+            {t.rules.valid}
           </span>
         )}
         <button
@@ -129,7 +139,7 @@ export default function RulesEditor() {
           disabled={!!error}
           className="rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
         >
-          Save Rules
+          {t.settings.save}
         </button>
       </div>
 

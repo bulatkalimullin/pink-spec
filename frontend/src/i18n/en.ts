@@ -1,0 +1,80 @@
+import type { Messages } from "./types";
+
+export const en: Messages = {
+  lang: {
+    label: "Language",
+    en: "English",
+    ru: "Russian",
+    hint: "UI and generated specifications will use this language",
+  },
+  nav: {
+    projects: "Projects",
+    statistics: "Statistics",
+    settings: "Settings",
+    documentation: "Documentation",
+    back: "Back",
+    configureRules: "Configure Rules",
+  },
+  home: {
+    title: "Pink Spec Agent",
+    subtitle:
+      "Turn your idea into a complete engineering specification — product, architecture, API, UI, and micro-tasks — powered by a multi-agent AI system.",
+    projectName: "Project name",
+    projectPlaceholder: "task-tracker (folder in output/)",
+    projectHint: "If empty — name is derived from the idea description",
+    ideaLabel: "Describe your idea",
+    ideaPlaceholder:
+      "e.g. A SaaS task tracker for remote teams with Kanban boards, real-time collaboration, and time tracking",
+    specLevel: "Specification level",
+    generate: "Generate Specification",
+    starting: "Starting…",
+    ideaTooShort: "Describe your idea (at least 10 characters)",
+    startFailed: "Failed to start session",
+    levels: {
+      L1: { name: "Brief", time: "2–5 min", desc: "Outline, problem, users, MVP scope" },
+      L2: { name: "Standard", time: "10–15 min", desc: "Core specs + 15–30 micro-tasks" },
+      L3: { name: "Full", time: "20–30 min", desc: "All artifacts + API spec + 50–100 tasks" },
+      L4: {
+        name: "Exhaustive",
+        time: "Until approved",
+        desc: "Dynamic pipeline, 100+ tasks, iterative review",
+      },
+    },
+    examples: [
+      "SaaS task tracker for remote teams with Kanban boards and real-time updates",
+      "E-commerce platform for handmade goods with seller dashboard and payment processing",
+      "Real-time fraud detection pipeline using streaming transaction data and ML models",
+      "Developer portfolio builder with GitHub integration and custom domain support",
+    ],
+  },
+  settings: {
+    title: "Settings",
+    configuration: "Configuration",
+    configHint:
+      "Values are read from .env on the backend. UI keeps a copy in localStorage; edit .env and restart backend to apply.",
+    reload: "Reload from .env",
+    save: "Save",
+    saved: "Saved locally. Change .env and restart backend to apply.",
+    loadFailed: "Could not load backend config — showing local values only",
+    loaded: "Loaded config from backend (.env)",
+  },
+  workspace: {
+    waitingTitle: "Agent is waiting for your answers",
+    questionsTitle: "Clarifying questions",
+    questionsHint: "Answer all {count} question(s) and click «Submit all answers». Pipeline starts only after that.",
+    noQuestions: "No open questions",
+    loading: "Loading questions…",
+    answerAll: "Answer all questions",
+    submitSuccess: "Answers submitted — agent will continue",
+    submitFailed: "Failed to submit answers",
+    yourAnswer: "Your answer…",
+    submit: "Submit all answers",
+    submitting: "Submitting…",
+  },
+  rules: {
+    title: "Rules Editor",
+    saved: "Rules saved to local storage",
+    invalidJson: "Invalid JSON",
+    valid: "Valid JSON",
+  },
+} satisfies Messages;

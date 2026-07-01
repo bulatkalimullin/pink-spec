@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, RefreshCw, Save } from "lucide-react";
+import LanguageSelector from "@/components/LanguageSelector";
+import { useI18n } from "@/i18n/I18nProvider";
 import { toast } from "sonner";
 
 interface Field {
@@ -55,6 +57,7 @@ function configToFormValues(config: Record<string, unknown>): Record<string, str
 
 export default function Settings() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [values, setValues] = useState<Record<string, string>>(() => {
     try {
       return JSON.parse(localStorage.getItem("pink_spec_settings") ?? "{}");
@@ -72,9 +75,9 @@ export default function Settings() {
       const config = await res.json();
       const fromEnv = configToFormValues(config);
       setValues((prev) => ({ ...fromEnv, ...prev }));
-      toast.success("Loaded config from backend (.env)");
+      toast.success(t.settings.loaded);
     } catch {
-      toast.error("Could not load backend config — showing local values only");
+      toast.error(t.settings.loadFailed);
     } finally {
       setLoading(false);
     }
@@ -86,7 +89,7 @@ export default function Settings() {
 
   const handleSave = () => {
     localStorage.setItem("pink_spec_settings", JSON.stringify(values));
-    toast.success("Saved locally. Change .env and restart backend to apply.");
+    toast.success(t.settings.saved);
   };
 
   const sections = [...new Set(FIELDS.map((f) => f.section ?? "General"))];
@@ -99,10 +102,10 @@ export default function Settings() {
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back
+          {t.nav.back}
         </button>
         <span className="text-border">|</span>
-        <span className="text-sm font-semibold">Settings</span>
+        <span className="text-sm font-semibold">{t.settings.title}</span>
         <div className="flex-1" />
         <button
           onClick={() => void loadFromBackend()}
@@ -111,26 +114,24 @@ export default function Settings() {
           title="Reload from .env"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Reload from .env</span>
+          <span className="hidden sm:inline">{t.settings.reload}</span>
         </button>
         <button
           onClick={handleSave}
           className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 transition-opacity sm:px-4"
-          title="Save"
+          title={t.settings.save}
         >
           <Save className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Save</span>
+          <span className="hidden sm:inline">{t.settings.save}</span>
         </button>
       </div>
 
       <div className="mx-auto max-w-lg py-8 px-4 space-y-8">
+        <LanguageSelector showHint />
+
         <div className="space-y-1">
-          <h2 className="text-lg font-semibold">Configuration</h2>
-          <p className="text-xs text-muted-foreground">
-            Значения читаются из <code className="font-mono">.env</code> на backend.
-            UI хранит копию в localStorage; для применения изменений отредактируй{" "}
-            <code className="font-mono">.env</code> и перезапусти backend.
-          </p>
+          <h2 className="text-lg font-semibold">{t.settings.configuration}</h2>
+          <p className="text-xs text-muted-foreground">{t.settings.configHint}</p>
         </div>
 
         {sections.map((section) => (
