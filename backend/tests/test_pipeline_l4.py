@@ -126,8 +126,14 @@ def test_check_l4_criteria_tasks_coverage():
     assert criteria["tasks_coverage"] is True
 
 
-def test_apply_refinement_clears_failed_artifacts():
+def test_apply_refinement_clears_failed_artifacts(tmp_path, monkeypatch):
+    from app.services import export as export_mod
+
+    monkeypatch.setattr(export_mod, "OUTPUT_ROOT", tmp_path)
+
+    session_id = "refine-session"
     state = {
+        "session_id": session_id,
         "pipeline": [
             {
                 "id": "product_analyst",
@@ -146,21 +152,32 @@ def test_apply_refinement_clears_failed_artifacts():
             "architect": "good",
             "reviewer": "{}",
         },
-        "artifacts": {"product_spec": "bad", "architecture_spec": "good"},
+        "artifacts": {
+            "product_spec": "<3 chars>",
+            "architecture_spec": "<4 chars>",
+        },
     }
+    from app.services.export import write_artifact
+
+    write_artifact(session_id, "product_spec", "bad")
+    write_artifact(session_id, "architecture_spec", "good")
+
     report = {
         "passed": False,
         "issues": [{"location": "product_spec#scope", "severity": "critical"}],
     }
-    updated = apply_refinement(state, report)
+    updated = apply_refinement(state, report, {"tasks_coverage": True})
     assert "product_analyst" not in updated["agent_outputs"]
     assert "architect" in updated["agent_outputs"]
     assert "product_spec" not in updated["artifacts"]
     assert "reviewer" not in updated["agent_outputs"]
+    assert not (tmp_path / session_id / "docs" / "product_spec.md").is_file()
+    assert (tmp_path / session_id / "docs" / "architecture_spec.md").is_file()
 
 
 def test_ensure_task_coverage_appends_batch():
     state = {
+        "session_id": "coverage-session",
         "spec_level": "L4",
         "tasks": [{"id": "001"}] * 10,
         "pipeline": [
@@ -187,3 +204,64 @@ def test_ensure_task_coverage_appends_batch():
     ]
     assert len(task_steps) >= 2
     assert any(s["id"].startswith("tasks_extra_") for s in task_steps)
+
+
+def test_ensure_task_coverage_no_reset_mid_cycle():
+    """After one batch completes, must not reset and re-run foundation."""
+    state = {
+        "session_id": "coverage-session",
+        "spec_level": "L4",
+        "tasks": [{"id": f"{i:03d}"} for i in range(1, 7)],
+        "pipeline": [
+            {"id": "tasks_foundation", "executor": "builtin:task_decomposer", "executor_agent": "task_decomposer"},
+            {"id": "tasks_backend", "executor": "builtin:task_decomposer", "executor_agent": "task_decomposer"},
+            {"id": "reviewer", "executor": "builtin:reviewer", "executor_agent": "reviewer"},
+        ],
+        "agent_outputs": {"tasks_foundation": "6 new, 6 total"},
+        "rules": {"l4": {"min_tasks": 100, "tasks_coverage_pct": 95, "max_task_batches": 2}},
+    }
+    updated = ensure_task_coverage(state)
+    assert updated["agent_outputs"]["tasks_foundation"] == "6 new, 6 total"
+    assert len(updated["tasks"]) == 6
+
+
+def test_ensure_task_coverage_resets_once_when_max_batches_exhausted():
+    state = {
+        "session_id": "coverage-session",
+        "spec_level": "L4",
+        "tasks": [{"id": f"{i:03d}"} for i in range(1, 45)],
+        "pipeline": [
+            {"id": "tasks_foundation", "executor": "builtin:task_decomposer", "executor_agent": "task_decomposer"},
+            {"id": "tasks_backend", "executor": "builtin:task_decomposer", "executor_agent": "task_decomposer"},
+            {"id": "reviewer", "executor": "builtin:reviewer", "executor_agent": "reviewer"},
+        ],
+        "agent_outputs": {
+            "tasks_foundation": "done",
+            "tasks_backend": "done",
+        },
+        "rules": {"l4": {"min_tasks": 100, "tasks_coverage_pct": 95, "max_task_batches": 2}},
+    }
+    updated = ensure_task_coverage(state)
+    assert "tasks_foundation" not in updated["agent_outputs"]
+    assert updated["tasks"] == []
+    assert updated["_task_coverage_retries"] == 1
+
+
+def test_ensure_task_coverage_no_second_reset():
+    state = {
+        "session_id": "coverage-session",
+        "spec_level": "L4",
+        "tasks": [{"id": f"{i:03d}"} for i in range(1, 30)],
+        "pipeline": [
+            {"id": "tasks_foundation", "executor": "builtin:task_decomposer", "executor_agent": "task_decomposer"},
+            {"id": "tasks_backend", "executor": "builtin:task_decomposer", "executor_agent": "task_decomposer"},
+            {"id": "reviewer", "executor": "builtin:reviewer", "executor_agent": "reviewer"},
+        ],
+        "agent_outputs": {"tasks_foundation": "done", "tasks_backend": "done"},
+        "_task_coverage_retries": 1,
+        "rules": {"l4": {"min_tasks": 100, "tasks_coverage_pct": 95, "max_task_batches": 2}},
+    }
+    updated = ensure_task_coverage(state)
+    assert updated["agent_outputs"]["tasks_foundation"] == "done"
+    assert len(updated["tasks"]) == 29
+    assert updated["_task_coverage_retries"] == 1

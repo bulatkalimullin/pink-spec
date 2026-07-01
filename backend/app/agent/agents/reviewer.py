@@ -8,6 +8,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
+from app.services.artifact_store import summarize_artifacts
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior engineering reviewer. Perform a quality review of all generated specifications.
@@ -41,16 +42,12 @@ class ReviewerAgent(BaseAgent):
     async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         session_id = state["session_id"]
         rules = state["rules"]
-        artifacts = state.get("artifacts", {})
+        artifacts_summary = await summarize_artifacts(session_id, max_per_key=1500)
 
         nfr = rules.get("nfr", {})
         agent_rules = rules.get("agent_rules", [])
         high_rules = [r for r in agent_rules if r.get("priority") in ("critical", "high")]
         assumptions = state.get("assumptions", [])
-
-        artifacts_summary = "\n\n".join(
-            f"=== {k} ===\n{v[:1500]}" for k, v in artifacts.items() if v
-        )
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -70,21 +67,27 @@ class ReviewerAgent(BaseAgent):
             "info",
             f"Running quality review (cycle #{state.get('review_cycles', 0) + 1})...",
         )
-        raw = await self._llm.generate(messages)
+        raw = await self._generate(state, messages)
         report = _parse_report(raw)
 
         if not report:
             await self._log(
                 session_id,
                 "warn",
-                "Reviewer returned invalid JSON; assuming pass with low confidence",
+                "Reviewer returned invalid JSON; treating as failed review",
             )
             report = {
-                "passed": True,
-                "confidence": 0.5,
-                "rules_compliant": True,
-                "issues": [],
-                "suggestions": [],
+                "passed": False,
+                "confidence": 0.0,
+                "rules_compliant": False,
+                "issues": [
+                    {
+                        "severity": "high",
+                        "description": "Reviewer output was not valid JSON",
+                        "location": "reviewer",
+                    }
+                ],
+                "suggestions": ["Re-run review after artifacts are regenerated"],
                 "summary": "Review parse error",
             }
 

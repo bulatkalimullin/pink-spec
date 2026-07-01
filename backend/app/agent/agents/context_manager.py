@@ -48,7 +48,7 @@ class ContextManagerAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Summarizing context...")
-        summary = await self._llm.generate(messages)
+        summary = await self._generate(state, messages)
 
         new_context = dict(state.get("context", {}))
         turn_summaries = list(new_context.get("turn_summaries", []))

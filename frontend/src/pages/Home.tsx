@@ -32,7 +32,7 @@ const SPEC_LEVELS = [
     id: "L4",
     name: "Exhaustive",
     time: "Until approved",
-    desc: "Deep-dive, iterative refinement, 100+ tasks",
+    desc: "Dynamic pipeline, 100+ tasks, iterative review",
     cls: "badge-L4",
   },
 ];
@@ -68,6 +68,13 @@ export default function Home() {
         }
       } catch {
         /* use default rules */
+      }
+      if (specLevel === "L4") {
+        const pipeline = (rules.pipeline as Record<string, unknown>) || {};
+        rules = {
+          ...rules,
+          pipeline: { ...pipeline, mode: "auto" },
+        };
       }
       const sessionId = await createAndStartSession(idea.trim(), rules);
       setSessionId(sessionId, specLevel, idea.trim());

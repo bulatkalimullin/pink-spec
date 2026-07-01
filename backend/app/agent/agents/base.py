@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
 import structlog
 
+from app.agent.stage_progress import (
+    emit_stage_changed,
+    generate_label_for_agent,
+    record_agent_duration,
+)
 from app.agent.state import MultiAgentState
 from app.services.log_bus import log_bus
+from app.services.session_runner import session_runner
 
 logger = structlog.get_logger(__name__)
 
@@ -53,10 +60,25 @@ class BaseAgent:
             },
         )
 
+        await emit_stage_changed(
+            state,
+            stage_id="generate",
+            label=generate_label_for_agent(state, run_id, agent_name),
+            agent_id=run_id,
+            sub_progress=0.1,
+        )
+
         start = time.time()
+        agent_task = asyncio.create_task(self._execute(state))
+        session_runner.set_agent_task(session_id, agent_task)
         try:
-            result = await self._execute(state)
+            result = await agent_task
             duration_ms = int((time.time() - start) * 1000)
+            duration_patch = record_agent_duration(
+                {**state, **(result if isinstance(result, dict) else {})},
+                run_id,
+                duration_ms,
+            )
             await log_bus.emit(
                 session_id,
                 "agent_completed",
@@ -66,7 +88,24 @@ class BaseAgent:
                     "status": "success",
                 },
             )
-            return result
+            merged = {**result, **duration_patch} if isinstance(result, dict) else duration_patch
+            return merged
+        except asyncio.CancelledError:
+            duration_ms = int((time.time() - start) * 1000)
+            await log_bus.emit(
+                session_id,
+                "agent_completed",
+                {
+                    "agent_id": run_id,
+                    "duration_ms": duration_ms,
+                    "status": "cancelled",
+                },
+            )
+            return {
+                **state,
+                "current_agent": "supervisor",
+                "errors": [*state.get("errors", []), f"{run_id}: cancelled"],
+            }
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             logger.exception("agent_error", agent=self.agent_id, error=str(e))
@@ -86,6 +125,8 @@ class BaseAgent:
                 "current_agent": "supervisor",
                 "_last_agent_failed": True,
             }
+        finally:
+            session_runner.set_agent_task(session_id, None)
 
     async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         raise NotImplementedError
@@ -100,6 +141,22 @@ class BaseAgent:
         if state.get("saturation_report", {}) and state["saturation_report"].get("context_brief"):
             parts.append("[RAG Context]\n" + state["saturation_report"]["context_brief"][:2000])
         return "\n\n".join(parts)
+
+    def _llm_kwargs(self, state: MultiAgentState, **extra: Any) -> dict[str, Any]:
+        """Per-session LLM options from rules.ollama (overrides global provider defaults)."""
+        ollama = state.get("rules", {}).get("ollama", {}) or {}
+        kwargs: dict[str, Any] = {}
+        if "max_tokens" in ollama:
+            kwargs["max_tokens"] = ollama["max_tokens"]
+        if "temperature" in ollama:
+            kwargs["temperature"] = ollama["temperature"]
+        if "timeout_sec" in ollama:
+            kwargs["timeout_sec"] = ollama["timeout_sec"]
+        kwargs.update(extra)
+        return kwargs
+
+    async def _generate(self, state: MultiAgentState, messages: list[dict], **extra: Any) -> str:
+        return await self._llm.generate(messages, **self._llm_kwargs(state, **extra))
 
     def _rules_snapshot(self, state: MultiAgentState) -> str:
         rules = state.get("rules", {})

@@ -9,6 +9,13 @@ from typing import Any
 from app.agent.agents.base import BaseAgent
 from app.agent.pipeline_utils import TASK_COUNT_BY_LEVEL, merge_tasks
 from app.agent.state import MultiAgentState
+from app.services.artifact_store import (
+    load_tasks_full_async,
+    read_artifact_slice,
+    save_artifact,
+    save_tasks,
+    summarize_artifacts,
+)
 from app.services.export import write_task_roadmap
 from app.services.log_bus import log_bus
 
@@ -67,18 +74,21 @@ class TaskDecomposerAgent(BaseAgent):
                 "current_step": None,
             }
 
-        artifacts = state.get("artifacts", {})
-        product_spec = artifacts.get("product_spec", "")
-        architecture_spec = artifacts.get("architecture_spec", "")
-        api_spec = artifacts.get("api_spec", "")
-        ui_spec = artifacts.get("ui_spec", "")
-        extra_specs = "\n".join(
-            f"=== {k} ===\n{v[:800]}"
-            for k, v in artifacts.items()
-            if k not in ("product_spec", "architecture_spec", "api_spec", "ui_spec") and v
+        product_spec = await read_artifact_slice(session_id, "product_spec", 1500)
+        architecture_spec = await read_artifact_slice(session_id, "architecture_spec", 1500)
+        api_spec = await read_artifact_slice(session_id, "api_spec", 800)
+        ui_spec = await read_artifact_slice(session_id, "ui_spec", 800)
+        extra_specs = await summarize_artifacts(
+            session_id,
+            keys=[
+                k
+                for k in state.get("artifacts", {})
+                if k not in ("product_spec", "architecture_spec", "api_spec", "ui_spec")
+            ],
+            max_per_key=800,
         )
         output_lang = rules.get("output", {}).get("language", "en")
-        existing_tasks = state.get("tasks", [])
+        existing_tasks = await load_tasks_full_async(session_id)
         existing_summary = ""
         if existing_tasks:
             existing_summary = (
@@ -94,10 +104,10 @@ class TaskDecomposerAgent(BaseAgent):
                 "role": "user",
                 "content": (
                     f"Generate approximately {target_count} tasks for:{focus_line}\n\n"
-                    f"Product:\n{product_spec[:1500]}\n\n"
-                    f"Architecture:\n{architecture_spec[:1500]}\n\n"
-                    f"API:\n{api_spec[:800]}\n\n"
-                    f"UI:\n{ui_spec[:800]}\n\n"
+                    f"Product:\n{product_spec}\n\n"
+                    f"Architecture:\n{architecture_spec}\n\n"
+                    f"API:\n{api_spec}\n\n"
+                    f"UI:\n{ui_spec}\n\n"
                     f"Additional specs:\n{extra_specs[:2000]}\n"
                     f"{existing_summary}\n\n"
                     f"Use spec_refs paths like docs/product_spec.md#section-name\n"
@@ -111,7 +121,7 @@ class TaskDecomposerAgent(BaseAgent):
             "info",
             f"Decomposing into ~{target_count} micro-tasks ({run_id})...",
         )
-        raw = await self._llm.generate(messages)
+        raw = await self._generate(state, messages)
         new_batch = _parse_tasks(raw)
 
         if not new_batch:
@@ -123,8 +133,24 @@ class TaskDecomposerAgent(BaseAgent):
                     "content": "Your output was not valid JSON. Return ONLY a valid JSON array of task objects. No markdown fences.",
                 },
             ]
-            raw = await self._llm.generate(repair_messages)
+            raw = await self._generate(state, repair_messages)
             new_batch = _parse_tasks(raw)
+
+        if not new_batch and _is_stub_output(raw):
+            await self._log(
+                session_id,
+                "error",
+                "LLM stub mode — Ollama not connected. Restart backend after Ollama is running.",
+            )
+            await log_bus.emit(
+                session_id,
+                "error",
+                {
+                    "code": "LLM_STUB",
+                    "message": "Ollama unavailable — task generation skipped",
+                    "recoverable": False,
+                },
+            )
 
         if not new_batch:
             await self._log(session_id, "warn", "Task decomposer returned empty/invalid JSON")
@@ -133,6 +159,7 @@ class TaskDecomposerAgent(BaseAgent):
             new_batch = _normalize_spec_refs(new_batch)
 
         tasks = merge_tasks(existing_tasks, new_batch)
+        slim_tasks_list = await save_tasks(session_id, tasks)
 
         phases: dict[str, int] = {}
         for t in new_batch:
@@ -157,23 +184,27 @@ class TaskDecomposerAgent(BaseAgent):
         ]
         is_last_batch = run_id == task_steps[-1] if task_steps else True
 
-        roadmap_md = state.get("artifacts", {}).get("TASK_ROADMAP", "")
+        roadmap_md = ""
+        if state.get("artifacts", {}).get("TASK_ROADMAP"):
+            roadmap_md = await read_artifact_slice(session_id, "TASK_ROADMAP", 100_000)
         if tasks and is_last_batch:
             try:
-                roadmap_md = await self._llm.generate(
+                roadmap_md = await self._generate(
+                    state,
                     [
                         {"role": "system", "content": ROADMAP_PROMPT},
-                        {"role": "user", "content": json.dumps(tasks[:50], indent=2)[:8000]},
-                    ]
+                        {"role": "user", "content": json.dumps(slim_tasks_list[:50], indent=2)[:8000]},
+                    ],
                 )
                 write_task_roadmap(session_id, roadmap_md)
             except Exception:
                 roadmap_md = _fallback_roadmap(tasks)
                 write_task_roadmap(session_id, roadmap_md)
 
-        new_artifacts = dict(artifacts)
+        new_artifacts = dict(state.get("artifacts", {}))
         if roadmap_md and is_last_batch:
-            new_artifacts["TASK_ROADMAP"] = roadmap_md
+            roadmap_placeholder = await save_artifact(session_id, "TASK_ROADMAP", roadmap_md)
+            new_artifacts["TASK_ROADMAP"] = roadmap_placeholder
 
         return {
             **state,
@@ -182,7 +213,7 @@ class TaskDecomposerAgent(BaseAgent):
                 run_id: f"{len(new_batch)} new, {len(tasks)} total",
             },
             "artifacts": new_artifacts,
-            "tasks": tasks,
+            "tasks": slim_tasks_list,
             "current_agent": "supervisor",
             "current_step": None,
         }
@@ -216,6 +247,10 @@ def _fallback_roadmap(tasks: list[dict]) -> str:
         for t in items[:10]:
             lines.append(f"- **{t.get('id')}** {t.get('title', '')}\n")
     return "".join(lines)
+
+
+def _is_stub_output(raw: str) -> bool:
+    return "[Stub: start Ollama and pull models]" in raw or raw.strip().startswith("# Stub Output")
 
 
 def _parse_tasks(raw: str) -> list[dict]:

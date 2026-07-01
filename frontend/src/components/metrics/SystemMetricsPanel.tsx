@@ -18,7 +18,7 @@ function MetricBar({ label, value, unit = "%", warn = 85, icon }: MetricBarProps
   return (
     <div className="flex items-center gap-2">
       <div className="text-muted-foreground">{icon}</div>
-      <span className="text-[11px] text-muted-foreground w-8 flex-shrink-0">{label}</span>
+      <span className="text-[11px] text-muted-foreground w-10 flex-shrink-0">{label}</span>
       <div className="flex-1 rounded-full bg-zinc-800 h-1.5 overflow-hidden">
         <div
           className={cn(
@@ -76,12 +76,16 @@ export default function SystemMetricsPanel() {
 
   if (!latest) {
     return (
-      <div className="px-3 py-2 text-xs text-zinc-600">No metrics yet…</div>
+      <div className="px-3 py-2 text-xs text-zinc-600">Метрики пока недоступны…</div>
     );
   }
 
   const cpuHistory = metricsHistory.map((m) => ({ value: m.cpu_percent }));
   const ramHistory = metricsHistory.map((m) => ({ value: m.ram_percent }));
+  const gpuMemPct =
+    latest.gpu && latest.gpu.mem_total_mb > 0
+      ? (latest.gpu.mem_used_mb / latest.gpu.mem_total_mb) * 100
+      : 0;
 
   return (
     <div className="min-w-0 space-y-2 px-3 py-2">
@@ -110,19 +114,41 @@ export default function SystemMetricsPanel() {
         icon={<HardDrive className="h-3 w-3" />}
       />
 
-      {latest.gpu && (
-        <>
+      {latest.gpu ? (
+        <div className="space-y-1.5 pt-0.5">
+          <p
+            className="text-[10px] font-medium text-muted-foreground truncate"
+            title={latest.gpu.name}
+          >
+            {latest.gpu.name}
+          </p>
           <MetricBar
-            label="GPU"
-            value={(latest.gpu.mem_used_mb / latest.gpu.mem_total_mb) * 100}
+            label="Load"
+            value={latest.gpu.util_percent}
             warn={90}
             icon={<CircuitBoard className="h-3 w-3" />}
           />
-          <div className="text-[10px] text-zinc-600 pl-6">
+          <MetricBar
+            label="VRAM"
+            value={gpuMemPct}
+            warn={90}
+            icon={<CircuitBoard className="h-3 w-3" />}
+          />
+          <div className="text-[10px] text-zinc-600 pl-6 break-words">
             {formatBytes(latest.gpu.mem_used_mb)} / {formatBytes(latest.gpu.mem_total_mb)}
-            {" "}{latest.gpu.temp_c}°C
+            {" · "}
+            {latest.gpu.temp_c}°C
+            {latest.gpu.driver_version && (
+              <span className="block text-zinc-700 truncate" title={latest.gpu.driver_version}>
+                Driver {latest.gpu.driver_version}
+              </span>
+            )}
           </div>
-        </>
+        </div>
+      ) : (
+        <p className="text-[10px] text-zinc-600 pl-1">
+          GPU недоступен — проверь nvidia runtime в backend
+        </p>
       )}
 
       <div className="text-[10px] text-zinc-600 pt-0.5">

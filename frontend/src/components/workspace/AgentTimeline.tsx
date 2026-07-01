@@ -37,9 +37,14 @@ export default function AgentTimeline() {
         const status = agent?.status ?? "pending";
         const config = STATUS_CONFIG[status];
         const label = agent?.name || step.name || agentId;
+        const isTaskBatch =
+          step.executor === "builtin:task_decomposer" || step.id.startsWith("tasks_");
+        const batchHint = isTaskBatch && step.prompt_focus
+          ? step.prompt_focus.slice(0, 40)
+          : null;
 
         return (
-          <div key={agentId} className="flex items-start gap-2">
+          <div key={`${agentId}-${i}`} className="flex items-start gap-2">
             <div className="flex flex-col items-center">
               <div className={cn("flex-shrink-0 mt-0.5", config.color)}>{config.icon}</div>
               {i < steps.length - 1 && (
@@ -56,7 +61,10 @@ export default function AgentTimeline() {
             <div
               className={cn(
                 "flex-1 rounded px-2 py-1 text-xs transition-all min-w-0",
-                isCurrent ? "bg-emerald-900/20 border border-emerald-700/40" : "border border-transparent"
+                isCurrent && "bg-emerald-900/25 border border-emerald-700/50",
+                !isCurrent && status === "success" && "bg-pink-900/15 border border-pink-800/30",
+                !isCurrent && status === "failed" && "bg-red-900/15 border border-red-800/30",
+                !isCurrent && status === "pending" && "border border-transparent"
               )}
             >
               <div className="flex items-center gap-2">
@@ -71,6 +79,11 @@ export default function AgentTimeline() {
                   <span className="text-[10px] text-zinc-600 shrink-0">{agent.durationMs}ms</span>
                 )}
               </div>
+              {batchHint && (
+                <p className="mt-0.5 text-[10px] text-zinc-500 truncate" title={step.prompt_focus ?? ""}>
+                  {batchHint}…
+                </p>
+              )}
             </div>
           </div>
         );

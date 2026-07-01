@@ -63,6 +63,16 @@
 | `saturation_done` | Saturation complete или fallback с ASSUMPTION |
 | `rules_compliant` | Все critical/high agent_rules проверены |
 
+### Минимальные требования L4 (`.env`)
+
+| Параметр | Рекомендация | Почему |
+|----------|--------------|--------|
+| `LLM_MAX_TOKENS` | ≥ 8192 | JSON batches (25 tasks) и exhaustive specs обрезаются при 2048 |
+| `OLLAMA_TIMEOUT_SEC` | ≥ 300 | Длинная генерация на локальной модели |
+| `OLLAMA_LLM_MODEL` | 7B+ (напр. `qwen2.5:7b`) | `gemma3:4b` часто даёт `completed_partial` |
+
+При `completed_partial` смотри `output/{session_id}/gaps.md` (секция **Unmet L4 Criteria**) и событие `session_completed_partial` в Activity.
+
 ### Time budget по уровням
 
 | Level | `max_duration_sec` | При превышении |

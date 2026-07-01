@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
+from app.agent.stage_progress import emit_stage_changed
 from app.agent.pipeline_utils import (
     BUILTIN_STEP_META,
     TASK_COUNT_BY_LEVEL,
@@ -98,6 +99,21 @@ class PipelinePlannerAgent(BaseAgent):
             },
         )
 
+        updated_state = {
+            **state,
+            "pipeline": steps,
+            "pipeline_planned": True,
+            "pipeline_reasoning": reasoning,
+        }
+        await emit_stage_changed(
+            updated_state,
+            stage_id="planning",
+            label="Планируем пайплайн",
+            detail=f"{len(steps)} шагов",
+            agent_id="pipeline_planner",
+            sub_progress=1.0,
+        )
+
         from app.services.session import save_pipeline
 
         await save_pipeline(session_id, steps, reasoning)
@@ -147,7 +163,7 @@ class PipelinePlannerAgent(BaseAgent):
         ]
 
         try:
-            raw = await self._llm.generate(messages)
+            raw = await self._generate(state, messages)
             data = _parse_json(raw)
             if not data:
                 return [], ""

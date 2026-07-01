@@ -31,12 +31,25 @@ async def run_saturation(
     embedding_provider,
     retriever,
     cfg: dict,
+    state: Any | None = None,
 ) -> dict[str, Any]:
     """
     Returns saturation_report:
       {status, iterations, chunks_collected, context_brief, query_history}
     """
     from app.services.log_bus import log_bus
+
+    if state is not None:
+        from app.agent.stage_progress import emit_stage_changed
+
+        await emit_stage_changed(
+            state,
+            stage_id="saturation",
+            label="Собираем контекст",
+            detail="Подготовка…",
+            agent_id="researcher",
+            sub_progress=0.0,
+        )
 
     max_iter: int = cfg.get("max_iterations", 5)
     top_k: int = cfg.get("top_k", 8)
@@ -82,6 +95,21 @@ async def run_saturation(
                 "queries_this_round": len(queries),
             },
         )
+
+        if state is not None:
+            from app.agent.stage_progress import emit_stage_changed
+
+            sub = iteration / max(max_iter, 1)
+            await emit_stage_changed(
+                state,
+                stage_id="saturation",
+                label="Собираем контекст",
+                detail=f"Итерация {iteration}/{max_iter} · {len(collected_texts)} фрагментов",
+                agent_id="researcher",
+                sub_progress=sub,
+                saturation_iteration=iteration,
+                saturation_max=max_iter,
+            )
 
         satisfied = avg_novelty < novelty_threshold and len(collected_texts) >= min_chunks
         if satisfied or iteration == max_iter:

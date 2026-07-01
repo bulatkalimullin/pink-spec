@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
+from app.services.artifact_store import save_artifact, summarize_artifacts
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior technical specification writer.
@@ -35,8 +36,7 @@ class GenericSpecAgent(BaseAgent):
 
         context = self._build_context(state)
         rules_snapshot = self._rules_snapshot(state)
-        artifacts = state.get("artifacts", {})
-        prior = "\n\n".join(f"=== {k} ===\n{v[:1200]}" for k, v in artifacts.items() if v)
+        prior = await summarize_artifacts(session_id, max_per_key=1200)
 
         output_lang = state["rules"].get("output", {}).get("language", "en")
 
@@ -57,7 +57,7 @@ class GenericSpecAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", f"Generating {name}...")
-        output = await self._llm.generate(messages)
+        output = await self._generate(state, messages)
 
         await log_bus.emit(
             session_id,
@@ -69,13 +69,14 @@ class GenericSpecAgent(BaseAgent):
         )
 
         run_id = step_id
+        placeholder = await save_artifact(session_id, artifact_key, output)
         return {
             **state,
             "agent_outputs": {
                 **state.get("agent_outputs", {}),
                 run_id: output[:200] + "…" if len(output) > 200 else output,
             },
-            "artifacts": {**state.get("artifacts", {}), artifact_key: output},
+            "artifacts": {**state.get("artifacts", {}), artifact_key: placeholder},
             "current_agent": "supervisor",
             "current_step": None,
         }

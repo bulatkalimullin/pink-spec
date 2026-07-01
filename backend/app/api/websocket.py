@@ -100,9 +100,12 @@ async def _handle_client_message(session_id: str, msg: dict) -> None:
         watchdog.deliver_answer(question_id, answer)
 
     elif msg_type == "cancel":
+        from app.services.session_runner import session_runner
+
         state = watchdog.get_state(session_id)
         if state:
             state.status = "failed"
+        session_runner.request_cancel(session_id)
         await log_bus.emit(
             session_id,
             "log_entry",

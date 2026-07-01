@@ -93,5 +93,20 @@
     "circuit_breaker_cooldown_sec": 60,
     "checkpoint_every_agent": true,
     "auto_resume_on_reconnect": true
+  },
+  "l4": {
+    "safety_cap_sec": 7200,
+    "completion_confidence": 0.85,
+    "tasks_coverage_pct": 95,
+    "min_tasks": 100,
+    "tasks_per_batch": 25,
+    "max_task_batches": 8
+  },
+  "pipeline": {
+    "mode": "auto",
+    "deliverables": [],
+    "include_tasks": null,
+    "min_steps": 12,
+    "min_deliverables": 8
   }
 }

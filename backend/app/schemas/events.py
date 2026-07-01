@@ -120,6 +120,28 @@ class SystemMetricsPayload(BaseModel):
     per_cpu: list[float] | None = None
 
 
+class GpuMetricsPayload(BaseModel):
+    name: str
+    util_percent: int
+    mem_used_mb: float
+    mem_total_mb: float
+    temp_c: int
+    driver_version: str | None = None
+
+
+class StageChangedPayload(BaseModel):
+    stage_id: str
+    label: str
+    detail: str | None = None
+    percent: int
+    step_index: int
+    total_steps: int
+    agent_id: str | None = None
+    elapsed_sec: int
+    eta_sec: int | None = None
+    budget_remaining_sec: int | None = None
+
+
 class SystemWarningPayload(BaseModel):
     metric: str
     value: float

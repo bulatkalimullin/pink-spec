@@ -46,11 +46,23 @@ def _collect_metrics(show_per_core: bool = False) -> dict:
             mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
             util = pynvml.nvmlDeviceGetUtilizationRates(handle)
             temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            name = pynvml.nvmlDeviceGetName(handle)
+            if isinstance(name, bytes):
+                name = name.decode("utf-8", errors="replace")
+            driver_version = None
+            try:
+                driver_version = pynvml.nvmlSystemGetDriverVersion()
+                if isinstance(driver_version, bytes):
+                    driver_version = driver_version.decode("utf-8", errors="replace")
+            except Exception:
+                pass
             metrics["gpu"] = {
+                "name": name,
                 "util_percent": util.gpu,
                 "mem_used_mb": round(mem.used / 1024 / 1024, 1),
                 "mem_total_mb": round(mem.total / 1024 / 1024, 1),
                 "temp_c": temp,
+                "driver_version": driver_version,
             }
         except Exception:
             metrics["gpu"] = None
@@ -76,13 +88,27 @@ class SystemMonitor:
                 await asyncio.sleep(1)
                 continue
 
-            # lazy import to avoid circular; log_bus is singleton
             from app.services.log_bus import log_bus
 
-            min_interval = min(cfg.get("interval_sec", 3) for cfg in self._active_sessions.values())
-            metrics = _collect_metrics()
+            enabled_sessions = {
+                sid: cfg
+                for sid, cfg in self._active_sessions.items()
+                if cfg.get("enabled", True)
+            }
+            if not enabled_sessions:
+                await asyncio.sleep(1)
+                continue
 
-            for session_id, cfg in list(self._active_sessions.items()):
+            show_per_core = any(cfg.get("show_per_core") for cfg in enabled_sessions.values())
+            min_interval = min(
+                cfg.get("interval_sec", 3) for cfg in enabled_sessions.values()
+            )
+            metrics = _collect_metrics(show_per_core=show_per_core)
+
+            for session_id, cfg in list(enabled_sessions.items()):
+                from app.services.session_metrics_accumulator import session_metrics_accumulator
+
+                session_metrics_accumulator.record(session_id, metrics)
                 await log_bus.emit(session_id, "system_metrics", metrics)
                 await _check_thresholds(session_id, metrics, cfg)
 
@@ -124,6 +150,9 @@ async def _check_thresholds(session_id: str, metrics: dict, cfg: dict) -> None:
 
     for key, label, threshold, hint in checks:
         if metrics.get(key, 0) >= threshold:
+            from app.services.session_metrics_accumulator import session_metrics_accumulator
+
+            session_metrics_accumulator.record_warning(session_id)
             await log_bus.emit(
                 session_id,
                 "system_warning",

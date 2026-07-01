@@ -70,6 +70,26 @@ async def init_db() -> None:
                 created_at TEXT NOT NULL,
                 answered_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS session_metrics (
+                session_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                spec_level TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                duration_sec REAL NOT NULL,
+                quality_score REAL NOT NULL,
+                metrics_json TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_session_metrics_completed
+                ON session_metrics (completed_at DESC);
+
+            CREATE TABLE IF NOT EXISTS global_stats (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                updated_at TEXT NOT NULL,
+                stats_json TEXT NOT NULL
+            );
         """)
         await db.commit()
         # Migration: add pipeline_json column if missing

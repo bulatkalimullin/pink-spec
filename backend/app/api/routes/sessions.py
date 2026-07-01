@@ -6,7 +6,12 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 
-from app.schemas.rules import AnswerRequest, RecoverRequest, StartSessionRequest
+from app.schemas.rules import (
+    AnswerRequest,
+    RecoverRequest,
+    SessionControlRequest,
+    StartSessionRequest,
+)
 from app.services.export import build_zip, read_artifact, read_task_file, session_output_dir
 from app.services.log_bus import log_bus
 from app.services.session import (
@@ -16,6 +21,7 @@ from app.services.session import (
     get_open_questions,
     get_session,
 )
+from app.services.session_control import enqueue, get_overrides, set_overrides
 from app.services.session_watchdog import watchdog
 
 logger = structlog.get_logger(__name__)
@@ -50,9 +56,20 @@ async def start_session(
     if session["status"] not in ("pending", "failed"):
         raise HTTPException(409, f"Session already in state: {session['status']}")
 
-    llm, emb = _get_providers()
+    from app.main import ensure_providers, is_stub_provider
 
-    async def _run():
+    if not await ensure_providers():
+        raise HTTPException(
+            503,
+            "Ollama недоступен. Запусти Ollama (и ollama-proxy), затем перезапусти backend: "
+            "docker compose restart backend",
+        )
+
+    llm, emb = _get_providers()
+    if is_stub_provider(llm):
+        raise HTTPException(503, "LLM provider in stub mode — Ollama not connected")
+
+    async def _run(cancel_event: asyncio.Event):
         from app.agent.graph import run_graph
 
         monitoring_cfg = body.rules.monitoring.model_dump()
@@ -66,19 +83,31 @@ async def start_session(
                 rules=body.rules.model_dump(),
                 llm_provider=llm,
                 embedding_provider=emb,
+                cancel_event=cancel_event,
             )
         finally:
             system_monitor.remove_session(session_id)
 
-    background_tasks.add_task(_run)
+    from app.services.session_runner import session_runner
+
+    try:
+        await session_runner.start(session_id, _run)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
     return {"session_id": session_id, "status": "starting"}
 
 
 @router.get("/{session_id}")
 async def get_session_endpoint(session_id: str):
+    from app.services.artifact_store import read_manifest_for_api
+
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    if not session.get("manifest"):
+        disk_manifest = read_manifest_for_api(session_id)
+        if disk_manifest:
+            session["manifest"] = disk_manifest
     questions = await get_open_questions(session_id)
     return {**session, "open_questions": questions}
 
@@ -89,9 +118,13 @@ async def session_health(session_id: str):
     if not session:
         raise HTTPException(404, "Session not found")
     wd_state = watchdog.get_state(session_id)
+    stuck = False
+    if wd_state:
+        stuck = wd_state.status == "stuck" or wd_state.is_stuck()
     return {
         "status": session["status"],
-        "stuck": wd_state.is_stuck() if wd_state else False,
+        "stuck": stuck,
+        "stuck_since_sec": wd_state.stuck_since_sec() if wd_state else None,
         "recoverable": session["status"] not in ("failed",),
         "current_agent": wd_state.current_agent if wd_state else None,
     }
@@ -109,18 +142,10 @@ async def submit_answer(session_id: str, body: AnswerRequest):
 
 @router.post("/{session_id}/resume")
 async def resume_session(session_id: str):
-    checkpoint = await get_latest_checkpoint(session_id)
-    if not checkpoint:
-        raise HTTPException(404, "No checkpoint found")
-    await log_bus.emit(
-        session_id,
-        "recovery_started",
-        {
-            "action": "resume_from_checkpoint",
-            "target_agent": checkpoint.get("agent_id"),
-        },
+    raise HTTPException(
+        501,
+        "Resume from checkpoint is not yet supported. Use POST /recover with retry_agent or force_export.",
     )
-    return {"checkpoint_id": checkpoint["id"], "agent_id": checkpoint.get("agent_id")}
 
 
 @router.post("/{session_id}/recover")
@@ -128,6 +153,31 @@ async def recover_session(session_id: str, body: RecoverRequest):
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+
+    directive: dict = {"action": body.action}
+    if body.target_agent:
+        directive["target_agent"] = body.target_agent
+    if body.max_review_cycles is not None:
+        directive["max_review_cycles"] = body.max_review_cycles
+    if body.completion_confidence is not None:
+        directive["completion_confidence"] = body.completion_confidence
+    if body.until_confident is not None:
+        directive["until_confident"] = body.until_confident
+
+    if (
+        body.max_review_cycles is not None
+        or body.completion_confidence is not None
+        or body.until_confident is not None
+    ):
+        set_overrides(session_id, directive)
+
+    enqueue(session_id, directive)
+
+    if body.action == "force_export":
+        from app.services.session_runner import session_runner
+
+        session_runner.request_cancel(session_id)
+
     await log_bus.emit(
         session_id,
         "recovery_started",
@@ -136,7 +186,61 @@ async def recover_session(session_id: str, body: RecoverRequest):
             "target_agent": body.target_agent,
         },
     )
-    return {"status": "recovery_initiated", "action": body.action}
+    return {"status": "recovery_initiated", "action": body.action, "overrides": get_overrides(session_id)}
+
+
+@router.get("/{session_id}/control")
+async def get_session_control(session_id: str):
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    rules = session.get("rules") or {}
+    overrides = get_overrides(session_id)
+    resilience = rules.get("resilience", {})
+    l4 = rules.get("l4", {})
+    return {
+        "max_review_cycles": overrides.get("max_review_cycles", resilience.get("max_review_cycles", 10)),
+        "completion_confidence": overrides.get(
+            "completion_confidence", l4.get("completion_confidence", 0.85)
+        ),
+        "until_confident": overrides.get("until_confident", l4.get("until_confident", True)),
+        "overrides_active": bool(overrides),
+    }
+
+
+@router.post("/{session_id}/control")
+async def session_control(session_id: str, body: SessionControlRequest):
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    settings = body.model_dump(exclude_none=True)
+    action = settings.pop("action", None)
+
+    if settings:
+        set_overrides(session_id, {**settings, "action": "update_settings"})
+        enqueue(session_id, {"action": "update_settings", **settings})
+
+    if action:
+        enqueue(session_id, {"action": action})
+
+    overrides = get_overrides(session_id)
+    await log_bus.emit(
+        session_id,
+        "refinement_settings",
+        {
+            "action": action,
+            **overrides,
+        },
+    )
+    if action:
+        await log_bus.emit(
+            session_id,
+            "recovery_started",
+            {"action": action, "target_agent": None},
+        )
+
+    return {"status": "ok", "action": action, "overrides": overrides}
 
 
 @router.get("/{session_id}/artifacts/tasks/{task_path:path}")

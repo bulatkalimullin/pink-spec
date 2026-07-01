@@ -7,9 +7,11 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import Header from "@/components/layout/Header";
 import MobileBottomNav, { type MobileNavTab } from "@/components/layout/MobileBottomNav";
 import PanelSheet from "@/components/layout/PanelSheet";
+import SessionProgressBar from "@/components/workspace/SessionProgressBar";
 import ActivityFeed from "@/components/workspace/ActivityFeed";
 import AgentTimeline from "@/components/workspace/AgentTimeline";
 import SupervisorCard from "@/components/workspace/SupervisorCard";
+import RefinementPanel from "@/components/workspace/RefinementPanel";
 import RecoveryPanel from "@/components/workspace/RecoveryPanel";
 import SystemMetricsPanel from "@/components/metrics/SystemMetricsPanel";
 import AssumptionsPanel from "@/components/observability/AssumptionsPanel";
@@ -132,8 +134,9 @@ export default function AgentWorkspace() {
         return <ActivityFeed />;
       case "supervisor":
         return (
-          <div className="p-3 space-y-3">
+          <div className="flex flex-col h-full min-h-0 p-3 space-y-3 overflow-y-auto">
             <SupervisorCard />
+            <RefinementPanel sessionId={sessionId} />
             {isStuck && <RecoveryPanel sessionId={sessionId} />}
           </div>
         );
@@ -286,6 +289,8 @@ export default function AgentWorkspace() {
     <div className="flex h-[100dvh] flex-col bg-background overflow-hidden">
       <Header sessionId={sessionId} onNotificationsClick={handleNotificationsClick} />
 
+      <SessionProgressBar />
+
       {/* Mobile hamburger for panel tabs on md */}
       {!isLg && (
         <div className="flex items-center gap-2 border-b border-border bg-card/50 px-3 py-1.5 lg:hidden">
@@ -317,7 +322,7 @@ export default function AgentWorkspace() {
 
         {/* Desktop / tablet side panel */}
         {isLg && (
-          <div className="hidden lg:block w-80 flex-shrink-0 border-r border-border bg-card/50 overflow-y-auto">
+          <div className="hidden lg:flex flex-col w-80 flex-shrink-0 border-r border-border bg-card/50 h-full min-h-0 overflow-hidden">
             {renderPanelContent()}
           </div>
         )}
@@ -343,8 +348,9 @@ export default function AgentWorkspace() {
         {isXl && (
           <div className="w-56 flex-shrink-0 border-l border-border overflow-y-auto hidden xl:block">
             <SystemMetricsPanel />
-            <div className="border-t border-border mt-2 pt-2">
+            <div className="border-t border-border mt-2 pt-2 px-3 pb-2 space-y-2">
               <SupervisorCard />
+              <RefinementPanel sessionId={sessionId ?? ""} />
             </div>
           </div>
         )}

@@ -17,7 +17,9 @@ from app.agent.pipeline_utils import (
     step_builtin_agent_id,
 )
 from app.agent.state import MultiAgentState
+from app.services.artifact_store import artifact_exists, remove_artifact
 from app.services.log_bus import log_bus
+from app.services.session_control import reset_task_decomposer_steps
 
 logger = structlog.get_logger(__name__)
 
@@ -135,8 +137,10 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
     passed = last_report.get("passed", False)
     confidence = last_report.get("confidence", 0)
     min_confidence = state["rules"].get("l4", {}).get("completion_confidence", 0.85)
+    until_confident = state["rules"].get("l4", {}).get("until_confident", True)
+    confident_enough = passed and confidence >= min_confidence
 
-    if all_met and passed and confidence >= min_confidence:
+    if all_met and confident_enough:
         await log_bus.emit(
             session_id,
             "log_entry",
@@ -156,12 +160,18 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
             {
                 "level": "warn",
                 "agent_id": "supervisor",
-                "message": "L4 criteria not met but max review cycles reached. Exporting partial.",
+                "message": f"L4 criteria not met but max review cycles ({max_review}) reached. Exporting partial.",
             },
         )
         return {"current_agent": "export", "status": "degraded"}
 
-    updated = apply_refinement(state, last_report)
+    if until_confident and not confident_enough:
+        updated = apply_refinement(state, last_report, criteria)
+    elif not criteria.get("tasks_coverage"):
+        updated = reset_task_decomposer_steps(state)
+    else:
+        updated = apply_refinement(state, last_report, criteria)
+
     updated = ensure_task_coverage(updated)
 
     await log_bus.emit(
@@ -170,7 +180,20 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
         {
             "level": "info",
             "agent_id": "supervisor",
-            "message": f"L4 refinement cycle #{updated.get('review_cycles', 0)}: re-running failed steps",
+            "message": (
+                f"L4 refinement cycle #{updated.get('review_cycles', 0)}: "
+                f"re-running steps (confidence={confidence:.2f}, need {min_confidence:.2f})"
+            ),
+        },
+    )
+    await log_bus.emit(
+        session_id,
+        "refinement_cycle",
+        {
+            "cycle": updated.get("review_cycles", 0),
+            "confidence": confidence,
+            "min_confidence": min_confidence,
+            "criteria": criteria,
         },
     )
     return {**updated, "current_agent": "supervisor"}
@@ -195,15 +218,25 @@ def ensure_task_coverage(state: MultiAgentState) -> MultiAgentState:
     batch_count = count_task_decomposer_steps(pipeline)
     max_batches = l4.get("max_task_batches", 8)
     if batch_count >= max_batches:
+        if len(tasks) < required:
+            outputs = state.get("agent_outputs", {})
+            pending_task_steps = _pending_task_step_ids(pipeline, outputs)
+            if pending_task_steps:
+                # Mid-cycle: do not wipe progress after each completed batch.
+                return state
+            retries = state.get("_task_coverage_retries", 0)
+            if retries >= 1:
+                # One full re-run already attempted; proceed to reviewer/export.
+                return state
+            return {
+                **reset_task_decomposer_steps(state),
+                "_task_coverage_retries": retries + 1,
+            }
         return state
 
     # Only add batches when all existing task steps are complete
     outputs = state.get("agent_outputs", {})
-    pending_task_steps = [
-        s["id"]
-        for s in pipeline
-        if step_builtin_agent_id(s) == "task_decomposer" and s["id"] not in outputs
-    ]
+    pending_task_steps = _pending_task_step_ids(pipeline, outputs)
     if pending_task_steps:
         return state
 
@@ -218,8 +251,33 @@ def ensure_task_coverage(state: MultiAgentState) -> MultiAgentState:
     return {**state, "pipeline": pipeline}
 
 
-def apply_refinement(state: MultiAgentState, report: dict[str, Any]) -> MultiAgentState:
+def _pending_task_step_ids(
+    pipeline: list[dict[str, Any]], outputs: dict[str, Any]
+) -> list[str]:
+    return [
+        s["id"]
+        for s in pipeline
+        if step_builtin_agent_id(s) == "task_decomposer"
+        and not _step_done(outputs, s["id"])
+    ]
+
+
+def _step_done(outputs: dict[str, Any], step_id: str) -> bool:
+    val = outputs.get(step_id)
+    if val is None:
+        return False
+    if val == "failed":
+        return False
+    return True
+
+
+def apply_refinement(
+    state: MultiAgentState,
+    report: dict[str, Any],
+    criteria: dict[str, bool] | None = None,
+) -> MultiAgentState:
     """Clear outputs for artifacts that failed review so they can be regenerated."""
+    criteria = criteria or {}
     issues = report.get("issues", [])
     artifact_keys: set[str] = set()
 
@@ -229,8 +287,16 @@ def apply_refinement(state: MultiAgentState, report: dict[str, Any]) -> MultiAge
         if key:
             artifact_keys.add(key)
 
+    pipeline = state.get("pipeline") or []
+    step_ids_to_clear: list[str] = []
+    keys_to_clear: set[str] = set()
+
+    if not artifact_keys and not criteria.get("tasks_coverage", True):
+        for step in pipeline:
+            if step_builtin_agent_id(step) == "task_decomposer":
+                step_ids_to_clear.append(step["id"])
+
     if not artifact_keys and not report.get("passed", True):
-        pipeline = state.get("pipeline") or []
         artifact_keys = {
             s.get("artifact_key")
             for s in pipeline
@@ -238,10 +304,6 @@ def apply_refinement(state: MultiAgentState, report: dict[str, Any]) -> MultiAge
             and step_builtin_agent_id(s) not in ("task_decomposer", "reviewer", "context_manager")
         }
         artifact_keys.discard(None)
-
-    pipeline = state.get("pipeline") or []
-    step_ids_to_clear: list[str] = []
-    keys_to_clear: set[str] = set()
 
     for step in pipeline:
         ak = step.get("artifact_key")
@@ -266,11 +328,13 @@ def apply_refinement(state: MultiAgentState, report: dict[str, Any]) -> MultiAge
 
     outputs = dict(state.get("agent_outputs", {}))
     artifacts = dict(state.get("artifacts", {}))
+    session_id = state["session_id"]
 
     for sid in step_ids_to_clear:
         outputs.pop(sid, None)
     for k in keys_to_clear:
         artifacts.pop(k, None)
+        remove_artifact(session_id, k)
 
     reviewer_steps = [s["id"] for s in pipeline if step_builtin_agent_id(s) == "reviewer"]
     for rid in reviewer_steps:
@@ -297,10 +361,14 @@ def check_l4_criteria(state: MultiAgentState) -> dict[str, bool]:
     min_tasks = l4.get("min_tasks", 100)
     pct = l4.get("tasks_coverage_pct", 95.0)
     required_task_count = int(min_tasks * pct / 100)
+    min_confidence = l4.get("completion_confidence", 0.85)
 
     return {
-        "artifacts_complete": all(k in artifacts for k in required),
-        "reviewer_approved": last_report.get("passed", False),
+        "artifacts_complete": all(
+            k in artifacts or artifact_exists(state["session_id"], k) for k in required
+        ),
+        "reviewer_approved": last_report.get("passed", False)
+        and last_report.get("confidence", 0) >= min_confidence,
         "no_critical_gaps": len(
             [q for q in state.get("open_questions", []) if q.get("priority") == "critical"]
         )
@@ -337,7 +405,7 @@ def _route_next(state: MultiAgentState) -> str:
     for step_id in sequence:
         if step_id == "export":
             continue
-        if step_id not in outputs:
+        if not _step_done(outputs, step_id):
             return step_id
     return "export"
 
@@ -356,14 +424,14 @@ def _skip_to_next(
 ) -> str:
     sequence = _get_sequence(state)
     stuck = stuck_agent or state.get("current_agent", "supervisor")
-    outputs = set(state.get("agent_outputs", {}).keys())
+    outputs = state.get("agent_outputs", {})
     call_counts = state.get("agent_call_counts", {})
 
     for step_id in sequence:
         if step_id == "export":
             continue
         if (
-            step_id not in outputs
+            not _step_done(outputs, step_id)
             and call_counts.get(step_id, 0) < loop_limit
             and step_id != stuck
         ):

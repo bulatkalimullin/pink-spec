@@ -34,6 +34,7 @@ class OllamaLLMProvider:
         self._timeout = timeout_sec
 
     async def generate(self, messages: list[dict], **kwargs) -> str:
+        timeout = float(kwargs.get("timeout_sec", self._timeout))
         payload = {
             "model": kwargs.get("model", self.model),
             "messages": messages,
@@ -44,7 +45,7 @@ class OllamaLLMProvider:
             },
             "keep_alive": self.keep_alive,
         }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(f"{self.base_url}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()

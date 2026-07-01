@@ -4,6 +4,7 @@ import RulesEditor from "./pages/RulesEditor";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import ArtifactsViewer from "./pages/ArtifactsViewer";
 import Settings from "./pages/Settings";
+import Statistics from "./pages/Statistics";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
       <Route path="/workspace/:sessionId" element={<AgentWorkspace />} />
       <Route path="/artifacts/:sessionId" element={<ArtifactsViewer />} />
       <Route path="/settings" element={<Settings />} />
+      <Route path="/statistics" element={<Statistics />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

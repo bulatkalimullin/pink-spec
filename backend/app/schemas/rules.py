@@ -46,6 +46,7 @@ class L4Config(BaseModel):
     min_tasks: int = Field(100, ge=10, le=500)
     tasks_per_batch: int = Field(25, ge=5, le=50)
     max_task_batches: int = Field(8, ge=1, le=20)
+    until_confident: bool = True
 
 
 class ProjectConfig(BaseModel):
@@ -209,5 +210,26 @@ class AnswerRequest(BaseModel):
 
 
 class RecoverRequest(BaseModel):
-    action: str = Field(..., pattern="^(retry_agent|skip_agent|force_export|restart_from)$")
+    action: str = Field(
+        ...,
+        pattern=(
+            "^(retry_agent|skip_agent|force_export|restart_from|replan_pipeline|"
+            "retry_tasks|retry_reviewer|update_settings)$"
+        ),
+    )
     target_agent: str | None = None
+    max_review_cycles: int | None = Field(None, ge=1, le=50)
+    completion_confidence: float | None = Field(None, ge=0.5, le=1.0)
+    until_confident: bool | None = None
+
+
+class SessionControlRequest(BaseModel):
+    """Live refinement settings and actions for a running session."""
+
+    max_review_cycles: int | None = Field(None, ge=1, le=50)
+    completion_confidence: float | None = Field(None, ge=0.5, le=1.0)
+    until_confident: bool | None = None
+    action: str | None = Field(
+        None,
+        pattern="^(replan_pipeline|retry_tasks|retry_reviewer|force_export)$",
+    )

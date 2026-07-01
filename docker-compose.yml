@@ -54,11 +54,14 @@ services:
     volumes:
       - pink-data:/data
       - pink-output:/output
+    runtime: ${DOCKER_GPU_RUNTIME:-nvidia}
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
       - SQLITE_PATH=/data/pink_spec.db
       - VECTOR_PATH=/data/vectors
       - OUTPUT_PATH=/output
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     restart: unless-stopped

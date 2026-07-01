@@ -1,4 +1,4 @@
-import { Bell, Settings, Zap } from "lucide-react";
+import { BarChart3, Bell, Settings, Zap } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useSessionStore } from "@/stores/sessionStore";
@@ -23,6 +23,7 @@ const STATUS_COLORS: Record<string, string> = {
   stuck: "text-amber-400",
   failed: "text-red-400",
   completed: "text-pink-400",
+  completed_partial: "text-orange-400",
   degraded: "text-orange-400",
   paused: "text-sky-400",
   pending: "text-zinc-400",
@@ -33,6 +34,7 @@ const STATUS_DOT_COLORS: Record<string, string> = {
   stuck: "bg-amber-400",
   failed: "bg-red-400",
   completed: "bg-pink-400",
+  completed_partial: "bg-orange-400",
   degraded: "bg-orange-400",
   paused: "bg-sky-400",
   pending: "bg-zinc-400",
@@ -114,6 +116,14 @@ export default function Header({ sessionId, onNotificationsClick }: HeaderProps)
           </span>
         )}
       </button>
+
+      <Link
+        to="/statistics"
+        className="shrink-0 rounded-md p-1.5 hover:bg-accent transition-colors"
+        title="Статистика"
+      >
+        <BarChart3 className="h-4 w-4 text-muted-foreground" />
+      </Link>
 
       <Link
         to="/settings"

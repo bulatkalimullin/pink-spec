@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
+from app.services.artifact_store import read_artifact_slice, save_artifact
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a Staff Software Architect. Based on the product specification, design the system architecture.
@@ -34,7 +35,7 @@ class ArchitectAgent(BaseAgent):
         rules = state["rules"]
 
         context = self._build_context(state)
-        product_spec = state.get("artifacts", {}).get("product_spec", "")
+        product_spec = await read_artifact_slice(session_id, "product_spec", 3000)
         rules_snapshot = self._rules_snapshot(state)
 
         depth_instruction = {
@@ -53,7 +54,7 @@ class ArchitectAgent(BaseAgent):
             {
                 "role": "user",
                 "content": (
-                    f"Product Specification:\n{product_spec[:3000]}\n\n"
+                    f"Product Specification:\n{product_spec}\n\n"
                     f"Stack constraints: {stack}\nNFR: {nfr}\n\n"
                     f"{context}\n\n{rules_snapshot}\n\n"
                     f"Instructions: {depth_instruction}\nOutput language: {output_lang}"
@@ -62,7 +63,7 @@ class ArchitectAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Designing architecture...")
-        output = await self._llm.generate(messages)
+        output = await self._generate(state, messages)
 
         await log_bus.emit(
             session_id,
@@ -82,8 +83,9 @@ class ArchitectAgent(BaseAgent):
                     session_id, "assumption_logged", {"text": text, "agent_id": self.agent_id}
                 )
 
-        new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output}
-        new_artifacts = {**state.get("artifacts", {}), "architecture_spec": output}
+        new_outputs = {**state.get("agent_outputs", {}), self._run_id(state): output[:200]}
+        placeholder = await save_artifact(session_id, "architecture_spec", output)
+        new_artifacts = {**state.get("artifacts", {}), "architecture_spec": placeholder}
 
         return {
             **state,

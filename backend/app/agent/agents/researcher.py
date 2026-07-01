@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
+from app.agent.stage_progress import emit_stage_changed
 from app.agent.state import MultiAgentState
 from app.services.log_bus import log_bus
 
@@ -64,6 +65,14 @@ class ResearcherAgent(BaseAgent):
         # Ingest sources
         sources = rag_cfg.get("sources", [])
         if sources:
+            await emit_stage_changed(
+                state,
+                stage_id="ingest",
+                label="Загружаем источники",
+                detail=f"{len(sources)} источник(ов)",
+                agent_id="researcher",
+                sub_progress=0.2,
+            )
             await self._log(session_id, "info", f"Ingesting {len(sources)} source(s)...")
             ingest_result = await ingest_sources(sources, retriever, session_id)
             await self._log(
@@ -88,6 +97,7 @@ class ResearcherAgent(BaseAgent):
                 embedding_provider=self._embedding_provider,
                 retriever=retriever,
                 cfg=sat_cfg,
+                state=state,
             )
         except Exception as e:
             await self._log(
@@ -116,6 +126,15 @@ class ResearcherAgent(BaseAgent):
             session_id,
             "info",
             f"Saturation {saturation_report['status']}: {saturation_report['chunks_collected']} chunks in {saturation_report['iterations']} iterations",
+        )
+
+        await emit_stage_changed(
+            state,
+            stage_id="context_ready",
+            label="Контекст получен",
+            detail=f"{saturation_report['chunks_collected']} фрагментов",
+            agent_id="researcher",
+            sub_progress=1.0,
         )
 
         # Update context state

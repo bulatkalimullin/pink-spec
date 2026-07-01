@@ -26,25 +26,42 @@ export default function ArtifactsViewer() {
   const [loadingContent, setLoadingContent] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
 
+  const [sessionStatus, setSessionStatus] = useState<string>("");
+
+  const loadArtifactMeta = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const s = await getSession(sessionId);
+      setSessionStatus(s.status ?? "");
+      const manifest = s.manifest;
+      if (!manifest?.artifacts) {
+        setArtifacts([]);
+        return;
+      }
+      const arts: ArtifactMeta[] = Object.keys(manifest.artifacts).map((type) => ({
+        type,
+        label: type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      }));
+      setArtifacts(arts);
+      setActiveArtifact((prev) => prev || (arts.length > 0 ? arts[0].type : ""));
+    } catch {
+      toast.error("Failed to load artifacts");
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     if (!sessionId) return;
-    getSession(sessionId)
-      .then((s) => {
-        const manifest = s.manifest;
-        if (!manifest?.artifacts) {
-          setArtifacts([]);
-          return;
-        }
-        const arts: ArtifactMeta[] = Object.keys(manifest.artifacts).map((type) => ({
-          type,
-          label: type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        }));
-        setArtifacts(arts);
-        if (arts.length > 0) setActiveArtifact(arts[0].type);
-      })
-      .catch(() => toast.error("Failed to load artifacts"))
-      .finally(() => setLoadingMeta(false));
-  }, [sessionId]);
+    setLoadingMeta(true);
+    void loadArtifactMeta().finally(() => setLoadingMeta(false));
+  }, [sessionId, loadArtifactMeta]);
+
+  useEffect(() => {
+    if (!sessionId || sessionStatus !== "running") return;
+    const interval = window.setInterval(() => {
+      void loadArtifactMeta();
+    }, 8000);
+    return () => window.clearInterval(interval);
+  }, [sessionId, sessionStatus, loadArtifactMeta]);
 
   const loadContent = useCallback(
     async (type: string) => {

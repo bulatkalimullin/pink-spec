@@ -17,12 +17,26 @@ export interface SystemMetrics {
   disk_percent: number;
   process_rss_mb: number;
   gpu?: {
+    name: string;
     util_percent: number;
     mem_used_mb: number;
     mem_total_mb: number;
     temp_c: number;
+    driver_version?: string | null;
   } | null;
   ts?: string;
+}
+
+export interface SessionProgress {
+  percent: number;
+  label: string;
+  detail: string | null;
+  stepIndex: number;
+  totalSteps: number;
+  elapsedSec: number;
+  etaSec: number | null;
+  etaUpdatedAt: number;
+  stageId: string;
 }
 
 export interface AgentState {
@@ -56,6 +70,8 @@ export interface PipelineStep {
   executor?: string;
   artifact_key?: string | null;
   required?: boolean;
+  prompt_focus?: string | null;
+  target_count?: number | null;
 }
 
 const LEGACY_PIPELINE: PipelineStep[] = [
@@ -92,10 +108,13 @@ interface SessionStore {
   currentAgent: string | null;
   supervisorRouting: { next_agent: string; reason: string; remaining_sec?: number } | null;
   l4Criteria: Record<string, boolean> | null;
+  sessionProgress: SessionProgress | null;
+  reviewCycles: number;
 
   // Recovery
   isStuck: boolean;
   stuckReason: string | null;
+  lastEventAt: number;
   circuitBreakers: Record<string, boolean>;
 
   // Dynamic pipeline
@@ -147,8 +166,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   currentAgent: null,
   supervisorRouting: null,
   l4Criteria: null,
+  sessionProgress: null,
+  reviewCycles: 0,
   isStuck: false,
   stuckReason: null,
+  lastEventAt: Date.now(),
   circuitBreakers: {},
   pipeline: LEGACY_PIPELINE,
   pipelineReasoning: "",
@@ -186,6 +208,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { type, payload, ts } = envelope;
     const state = get();
 
+    set({ lastEventAt: Date.now() });
+
     // Push to log feed (skip high-level control frames and metrics)
     if (type !== "system_metrics" && !NON_FEED_TYPES.has(type)) {
       get().pushLog(envelope);
@@ -200,6 +224,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         const p = payload as { agent_id: string; agent_name: string; pass_number: number };
         set((s) => ({
           currentAgent: p.agent_id,
+          isStuck: false,
+          stuckReason: null,
           agents: {
             ...s.agents,
             [p.agent_id]: {
@@ -235,6 +261,47 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         break;
       }
 
+      case "stage_changed": {
+        const p = payload as {
+          stage_id: string;
+          label: string;
+          detail?: string | null;
+          percent: number;
+          step_index: number;
+          total_steps: number;
+          elapsed_sec: number;
+          eta_sec?: number | null;
+        };
+        set({
+          sessionProgress: {
+            stageId: p.stage_id,
+            label: p.label,
+            detail: p.detail ?? null,
+            percent: p.percent,
+            stepIndex: p.step_index,
+            totalSteps: p.total_steps,
+            elapsedSec: p.elapsed_sec,
+            etaSec: p.eta_sec ?? null,
+            etaUpdatedAt: Date.now(),
+          },
+        });
+        break;
+      }
+
+      case "saturation_progress": {
+        const p = payload as { iteration: number; chunks: number };
+        set((s) => {
+          if (!s.sessionProgress) return {};
+          return {
+            sessionProgress: {
+              ...s.sessionProgress,
+              detail: `Итерация ${p.iteration} · ${p.chunks} фрагментов`,
+            },
+          };
+        });
+        break;
+      }
+
       case "supervisor_routing": {
         const p = payload as { next_agent: string; reason: string; remaining_sec?: number };
         set({ supervisorRouting: p });
@@ -264,7 +331,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }
 
       case "recovery_started":
-        set({ isStuck: false, stuckReason: null });
         break;
 
       case "circuit_breaker_open": {
@@ -289,6 +355,27 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         break;
       }
 
+      case "session_completed_partial": {
+        const p = payload as {
+          failed_criteria?: string[];
+          criteria?: Record<string, boolean>;
+        };
+        if (p.criteria) {
+          set({ l4Criteria: p.criteria });
+        }
+        break;
+      }
+
+      case "refinement_cycle": {
+        const p = payload as { cycle: number };
+        set({ reviewCycles: p.cycle });
+        break;
+      }
+
+      case "refinement_settings": {
+        break;
+      }
+
       case "pipeline_planned": {
         const p = payload as { steps: PipelineStep[]; reasoning?: string };
         if (p.steps?.length) {
@@ -297,9 +384,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         break;
       }
 
-      case "done":
-        set({ sessionStatus: "completed", currentAgent: null, isStuck: false });
+      case "done": {
+        const p = payload as { is_partial?: boolean };
+        set({
+          sessionStatus: p.is_partial ? "completed_partial" : "completed",
+          currentAgent: null,
+          isStuck: false,
+          sessionProgress: null,
+        });
         break;
+      }
 
       case "session_snapshot": {
         const p = payload as { status: string; log_tail?: LogEntry[] };
@@ -336,8 +430,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       currentAgent: null,
       supervisorRouting: null,
       l4Criteria: null,
+      sessionProgress: null,
+      reviewCycles: 0,
       isStuck: false,
       stuckReason: null,
+      lastEventAt: Date.now(),
       circuitBreakers: {},
       pipeline: LEGACY_PIPELINE,
       pipelineReasoning: "",

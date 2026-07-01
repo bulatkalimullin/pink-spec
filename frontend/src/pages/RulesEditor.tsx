@@ -19,8 +19,8 @@ const DEFAULT_RULES = {
   output: { language: "en", format: "markdown", include_diagrams: true },
   agent_rules: [],
   ollama: {
-    llm_model: "qwen2.5:7b",
-    fallback_models: ["llama3.2"],
+    llm_model: "gemma3:4b",
+    fallback_models: ["gemma3:1b", "qwen-uncensored-q4:latest"],
     embedding_model: "nomic-embed-text",
     embedding_fallback: "keyword",
     temperature: 0.2,
@@ -46,10 +46,21 @@ const DEFAULT_RULES = {
     checkpoint_every_agent: true,
     auto_resume_on_reconnect: true,
   },
+  l4: {
+    safety_cap_sec: 7200,
+    completion_confidence: 0.85,
+    tasks_coverage_pct: 95,
+    min_tasks: 100,
+    tasks_per_batch: 25,
+    max_task_batches: 8,
+    until_confident: true,
+  },
   pipeline: {
     mode: "auto",
     deliverables: [],
     include_tasks: null,
+    min_steps: null,
+    min_deliverables: null,
   },
 };
 

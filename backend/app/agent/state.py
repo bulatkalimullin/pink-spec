@@ -29,6 +29,7 @@ class MultiAgentState(TypedDict):
     # Agent tracking
     current_agent: str
     agent_call_counts: dict[str, int]
+    agent_durations: dict[str, int]
     review_cycles: int
     agent_outputs: dict[str, str]
 
@@ -86,11 +87,10 @@ def initial_state(
             pipeline_cfg["min_steps"] = 12
         if pipeline_cfg.get("min_deliverables") is None:
             pipeline_cfg["min_deliverables"] = 8
-        ollama = dict(rules.get("ollama", {}) or {})
-        if ollama.get("max_tokens", 4096) < 8192:
-            ollama["max_tokens"] = 8192
-        rules["ollama"] = ollama
         rules["pipeline"] = pipeline_cfg
+        from app.agent.l4_guards import apply_l4_runtime_guards
+
+        rules, _ = apply_l4_runtime_guards(rules)
 
     if mode == "fixed":
         from app.agent.pipeline_utils import legacy_sequence_to_steps
@@ -113,6 +113,7 @@ def initial_state(
         started_at=time.time(),
         current_agent="supervisor",
         agent_call_counts={},
+        agent_durations={},
         review_cycles=0,
         agent_outputs={},
         artifacts={},

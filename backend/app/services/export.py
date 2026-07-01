@@ -70,6 +70,16 @@ def write_gaps(session_id: str, gaps: dict) -> Path:
     for i, action in enumerate(gaps.get("manual_actions", []), 1):
         lines.append(f"{i}. {action}\n")
 
+    unmet = gaps.get("unmet_l4_criteria") or []
+    l4_criteria = gaps.get("l4_criteria") or {}
+    if unmet or l4_criteria:
+        lines.append("\n## Unmet L4 Criteria\n")
+        for key, met in l4_criteria.items():
+            mark = "✓" if met else "✗"
+            lines.append(f"- [{mark}] {key.replace('_', ' ')}\n")
+        if unmet:
+            lines.append(f"\nFailed checks: {', '.join(unmet)}\n")
+
     content = "".join(lines)
     path = session_output_dir(session_id) / "gaps.md"
     path.write_text(content, encoding="utf-8")

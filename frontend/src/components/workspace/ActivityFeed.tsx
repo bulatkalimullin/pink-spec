@@ -15,6 +15,8 @@ import {
   FileText,
   Shield,
   RotateCcw,
+  Loader2,
+  Search,
 } from "lucide-react";
 
 const LEVEL_STYLES: Record<string, { icon: React.ReactNode; cls: string }> = {
@@ -39,6 +41,8 @@ const TYPE_META: Record<string, { icon: React.ReactNode; label: string; badge?: 
   checkpoint_saved: { icon: <CheckCircle className="h-3 w-3" />, label: "Checkpoint", badge: "CKPT" },
   artifact_preview: { icon: <FileText className="h-3 w-3" />, label: "Artifact" },
   done: { icon: <CheckCircle className="h-3 w-3" />, label: "Done", badge: "DONE" },
+  stage_changed: { icon: <Loader2 className="h-3 w-3" />, label: "Этап", badge: "STAGE" },
+  saturation_progress: { icon: <Search className="h-3 w-3" />, label: "Контекст", badge: "RAG" },
 };
 
 function getEntryStyle(entry: LogEntry) {
@@ -68,42 +72,119 @@ function getEntryMessage(entry: LogEntry): string {
     case "checkpoint_saved": return `Checkpoint saved: ${p?.checkpoint_id}`;
     case "artifact_preview": return `${p?.artifact_type} preview…`;
     case "done": return `Complete! ${p?.artifacts_count} artifacts, ${p?.tasks_count} tasks`;
+    case "stage_changed": {
+      const detail = p?.detail ? ` — ${p.detail}` : "";
+      const eta = p?.eta_sec != null ? ` · ≈${Math.round((p.eta_sec as number) / 60)} мин` : "";
+      return `${p?.label}${detail} (${p?.percent}%)${eta}`;
+    }
+    case "saturation_progress":
+      return `Собираем контекст: итерация ${p?.iteration}, ${p?.chunks} фрагментов`;
     default: return JSON.stringify(p).slice(0, 120);
   }
 }
 
-interface FeedEntryProps {
-  entry: LogEntry;
+type EntryVisualState = "current" | "completed" | "failed" | "default";
+
+const ROW_STYLES: Record<EntryVisualState, string> = {
+  current:
+    "bg-emerald-950/50 border-l-2 border-l-emerald-500 text-emerald-100",
+  completed:
+    "bg-pink-950/30 border-l-2 border-l-pink-500/70 text-pink-100",
+  failed:
+    "bg-red-950/30 border-l-2 border-l-red-500/70 text-red-200",
+  default: "",
+};
+
+function getAgentId(entry: LogEntry): string {
+  const p = entry.payload;
+  if (entry.type === "supervisor_routing") {
+    return (p?.next_agent as string) ?? "";
+  }
+  return (p?.agent_id as string) ?? "";
 }
 
-function FeedEntry({ entry }: FeedEntryProps) {
+function getEntryVisualState(
+  entry: LogEntry,
+  currentAgent: string | null,
+): EntryVisualState {
+  const agentId = getAgentId(entry);
+
+  if (entry.type === "agent_completed") {
+    const status = entry.payload?.status as string;
+    if (status === "success") return "completed";
+    if (status === "failed" || status === "cancelled") return "failed";
+  }
+
+  if (agentId && currentAgent && agentId === currentAgent) {
+    return "current";
+  }
+
+  return "default";
+}
+
+interface FeedEntryProps {
+  entry: LogEntry;
+  currentAgent: string | null;
+}
+
+function FeedEntry({ entry, currentAgent }: FeedEntryProps) {
   const [expanded, setExpanded] = useState(false);
   const meta = TYPE_META[entry.type];
   const style = getEntryStyle(entry);
   const message = getEntryMessage(entry);
-  const agentId = (entry.payload?.agent_id as string) ?? "";
+  const agentId = getAgentId(entry);
+  const visualState = getEntryVisualState(entry, currentAgent);
   const timeLabel = formatTimeAgo(entry.ts);
 
   return (
     <div
       className={cn(
         "group flex gap-2 px-3 py-1.5 hover:bg-accent/30 cursor-pointer transition-colors border-b border-border/40",
-        style.cls
+        ROW_STYLES[visualState],
+        visualState === "default" && style.cls
       )}
       onClick={() => setExpanded((e) => !e)}
     >
       {/* Icon */}
-      <div className="mt-0.5 flex-shrink-0">{meta?.icon ?? style.icon}</div>
+      <div className="mt-0.5 flex-shrink-0">
+        {visualState === "current" ? (
+          <Loader2 className="h-3 w-3 animate-spin text-emerald-400" />
+        ) : visualState === "completed" ? (
+          <CheckCircle className="h-3 w-3 text-pink-400" />
+        ) : (
+          meta?.icon ?? style.icon
+        )}
+      </div>
 
       {/* Content */}
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-xs">
-          {/* Agent badge */}
+        <div className="flex items-center gap-2 text-xs min-w-0">
           {agentId && (
-            <span className="font-mono text-[10px] text-muted-foreground">[{agentId}]</span>
+            <span
+              className={cn(
+                "font-mono text-[10px] truncate max-w-[100px]",
+                visualState === "current"
+                  ? "text-emerald-300 font-semibold"
+                  : visualState === "completed"
+                    ? "text-pink-300"
+                    : "text-muted-foreground"
+              )}
+            >
+              [{agentId}]
+            </span>
+          )}
+          {visualState === "current" && (
+            <span className="rounded bg-emerald-500/20 px-1 text-[9px] font-semibold uppercase text-emerald-300">
+              RUN
+            </span>
+          )}
+          {visualState === "completed" && entry.type === "agent_completed" && (
+            <span className="rounded bg-pink-500/20 px-1 text-[9px] font-semibold uppercase text-pink-300">
+              OK
+            </span>
           )}
           {/* Type badge */}
-          {meta?.badge && (
+          {meta?.badge && visualState === "default" && (
             <span className="rounded border border-current px-1 text-[9px] font-semibold uppercase opacity-70">
               {meta.badge}
             </span>
@@ -118,7 +199,7 @@ function FeedEntry({ entry }: FeedEntryProps) {
             <ChevronDown className="h-3 w-3 opacity-0 group-hover:opacity-40" />
           )}
         </div>
-        <p className="text-xs leading-relaxed">{message}</p>
+        <p className="text-xs leading-relaxed break-words min-w-0">{message}</p>
         {expanded && (
           <pre className="mt-1.5 rounded bg-zinc-900 p-2 text-[10px] font-mono text-zinc-400 overflow-x-auto">
             {JSON.stringify(entry.payload, null, 2)}
@@ -133,6 +214,7 @@ type FilterLevel = "all" | "info" | "warn" | "error";
 
 export default function ActivityFeed() {
   const logs = useSessionStore((s) => s.logs);
+  const currentAgent = useSessionStore((s) => s.currentAgent);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<FilterLevel>("all");
   const [autoScroll, setAutoScroll] = useState(true);
@@ -155,11 +237,15 @@ export default function ActivityFeed() {
   }, [filtered.length, autoScroll]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
         <span className="text-xs text-muted-foreground font-medium">Activity</span>
         <span className="text-xs text-zinc-600">({filtered.length})</span>
+        <span className="hidden sm:inline text-[10px] text-zinc-600">
+          <span className="text-emerald-400">●</span> run
+          <span className="mx-1.5 text-pink-400">●</span> done
+        </span>
         <div className="flex-1" />
         {(["all", "info", "warn", "error"] as FilterLevel[]).map((f) => (
           <button
@@ -185,13 +271,15 @@ export default function ActivityFeed() {
       </div>
 
       {/* Feed */}
-      <div className="flex-1 overflow-y-auto" onScroll={() => setAutoScroll(false)}>
+      <div className="flex-1 min-h-0 overflow-y-auto" onScroll={() => setAutoScroll(false)}>
         {filtered.length === 0 ? (
           <div className="flex h-full items-center justify-center text-xs text-zinc-600">
             Waiting for events…
           </div>
         ) : (
-          filtered.map((entry) => <FeedEntry key={entry.seq} entry={entry} />)
+          filtered.map((entry) => (
+            <FeedEntry key={entry.seq} entry={entry} currentAgent={currentAgent} />
+          ))
         )}
         <div ref={bottomRef} />
       </div>

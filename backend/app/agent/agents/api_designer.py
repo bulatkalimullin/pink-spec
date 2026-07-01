@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
+from app.services.artifact_store import read_artifact_slice, save_artifact
 from app.services.log_bus import log_bus
 
 SYSTEM_PROMPT = """You are a senior API Designer. Design a comprehensive API specification based on the architecture.
@@ -27,8 +28,8 @@ class APIDesignerAgent(BaseAgent):
         session_id = state["session_id"]
         rules = state["rules"]
 
-        architecture_spec = state.get("artifacts", {}).get("architecture_spec", "")
-        product_spec = state.get("artifacts", {}).get("product_spec", "")
+        architecture_spec = await read_artifact_slice(session_id, "architecture_spec", 2000)
+        product_spec = await read_artifact_slice(session_id, "product_spec", 1000)
         context = self._build_context(state)
         rules_snapshot = self._rules_snapshot(state)
         output_lang = rules.get("output", {}).get("language", "en")
@@ -38,8 +39,8 @@ class APIDesignerAgent(BaseAgent):
             {
                 "role": "user",
                 "content": (
-                    f"Architecture:\n{architecture_spec[:2000]}\n\n"
-                    f"Product Spec:\n{product_spec[:1000]}\n\n"
+                    f"Architecture:\n{architecture_spec}\n\n"
+                    f"Product Spec:\n{product_spec}\n\n"
                     f"{context}\n\n{rules_snapshot}\n\n"
                     f"Output language: {output_lang}"
                 ),
@@ -47,7 +48,7 @@ class APIDesignerAgent(BaseAgent):
         ]
 
         await self._log(session_id, "info", "Designing API contracts and data models...")
-        output = await self._llm.generate(messages)
+        output = await self._generate(state, messages)
 
         await log_bus.emit(
             session_id,
@@ -68,11 +69,13 @@ class APIDesignerAgent(BaseAgent):
                 )
 
         run_id = self._run_id(state)
-        new_outputs = {**state.get("agent_outputs", {}), run_id: output}
+        new_outputs = {**state.get("agent_outputs", {}), run_id: output[:200]}
+        api_placeholder = await save_artifact(session_id, "api_spec", output)
+        data_placeholder = await save_artifact(session_id, "data_model", output)
         new_artifacts = {
             **state.get("artifacts", {}),
-            "api_spec": output,
-            "data_model": output,
+            "api_spec": api_placeholder,
+            "data_model": data_placeholder,
         }
 
         return {
