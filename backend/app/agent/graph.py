@@ -49,16 +49,39 @@ async def _export_node(state: MultiAgentState) -> dict[str, Any]:
         },
     )
 
-    if is_partial or is_failed or state.get("errors"):
+    review_reports = state.get("review_reports", [])
+    review_never_passed = bool(review_reports) and not any(r.get("passed") for r in review_reports)
+    needs_gaps = (
+        is_partial
+        or is_failed
+        or bool(state.get("errors"))
+        or review_never_passed
+        or state.get("_review_plateau")
+    )
+
+    if needs_gaps:
         gaps_payload: dict[str, Any] = {
             "status": "failed" if is_failed else state.get("status", "unknown"),
-            "reason": _partial_export_reason(state, is_partial, is_failed),
+            "reason": _partial_export_reason(state, is_partial, is_failed, review_never_passed),
             "failed_steps": [
                 {"agent": e.split(":")[0], "reason": e} for e in state.get("errors", [])
             ],
             "open_questions": [q.get("text", "") for q in state.get("open_questions", [])],
             "manual_actions": ["Review gaps.md and complete missing sections manually"],
         }
+        if review_never_passed and not state.get("errors"):
+            last = review_reports[-1] if review_reports else {}
+            for issue in last.get("issues", [])[:10]:
+                gaps_payload["failed_steps"].append(
+                    {
+                        "agent": "reviewer",
+                        "reason": f"[{issue.get('severity', '?')}] {issue.get('description', '')}",
+                    }
+                )
+            gaps_payload["manual_actions"].insert(
+                0,
+                f"Reviewer never passed after {len(review_reports)} cycle(s)",
+            )
         if state.get("spec_level") == "L4":
             criteria = check_l4_criteria(state)
             unmet = [k for k, met in criteria.items() if not met]
@@ -91,7 +114,7 @@ async def _export_node(state: MultiAgentState) -> dict[str, Any]:
         "review_reports": state.get("review_reports", []),
         "recovery_trace": state.get("recovery_trace", []),
         "errors": state.get("errors", []),
-        "gaps_file": "gaps.md" if (is_partial or is_failed) else None,
+        "gaps_file": "gaps.md" if needs_gaps else None,
     }
     manifest_body = {k: v for k, v in manifest.items() if k != "session_id"}
     await patch_manifest(session_id, **manifest_body)
@@ -143,10 +166,17 @@ def _count_phases(tasks: list[dict]) -> int:
 
 
 def _partial_export_reason(
-    state: MultiAgentState, is_partial: bool, is_failed: bool
+    state: MultiAgentState,
+    is_partial: bool,
+    is_failed: bool,
+    review_never_passed: bool = False,
 ) -> str:
     if is_failed:
         return "errors"
+    if review_never_passed:
+        return "review_never_passed"
+    if state.get("_review_plateau"):
+        return "review_plateau"
     if not is_partial:
         return "unknown"
     if state.get("errors"):
@@ -177,6 +207,7 @@ async def run_graph(
     from app.agent.agents.generic_spec import GenericSpecAgent
     from app.agent.agents.pipeline_planner import PipelinePlannerAgent
     from app.agent.agents.product_analyst import ProductAnalystAgent
+    from app.agent.agents.refinement_fixer import RefinementFixerAgent
     from app.agent.agents.researcher import ResearcherAgent
     from app.agent.agents.reviewer import ReviewerAgent
     from app.agent.agents.task_decomposer import TaskDecomposerAgent
@@ -259,6 +290,7 @@ async def run_graph(
         "ui_designer": UIDesignerAgent(llm=llm_provider),
         "task_decomposer": TaskDecomposerAgent(llm=llm_provider),
         "reviewer": ReviewerAgent(llm=llm_provider),
+        "refinement_fixer": RefinementFixerAgent(llm=llm_provider),
         "context_manager": ContextManagerAgent(llm=llm_provider),
     }
     generic_agent = GenericSpecAgent(llm=llm_provider)
@@ -266,6 +298,8 @@ async def run_graph(
     def resolve_agent(step_id: str, state: MultiAgentState):
         if step_id == "export":
             return None
+        if step_id == "refinement_fixer":
+            return builtin_agents["refinement_fixer"]
         step = None
         for s in state.get("pipeline") or []:
             if s.get("id") == step_id:
@@ -284,7 +318,64 @@ async def run_graph(
     wd_state = watchdog.register(session_id, resilience_cfg)
     checkpoint_enabled = resilience_cfg.get("checkpoint_every_agent", True)
 
+    from app.services.intake import (
+        clear_intake_event,
+        load_answered_qa,
+        merge_answers_into_state,
+        run_intake_phase,
+        wait_for_intake_answers,
+    )
+
     try:
+        state, proceed = await run_intake_phase(state, llm_provider)
+        while not proceed:
+            if cancel_event and cancel_event.is_set():
+                state = {**state, "current_agent": "export", "status": "degraded"}
+                break
+
+            await emit_stage_changed(
+                state,
+                stage_id="intake",
+                label="Ждём ответы",
+                detail="Ответьте на все вопросы в панели Questions",
+                agent_id="intake",
+                sub_progress=0.1,
+            )
+
+            hitl_timeout = int(resilience_cfg.get("hitl_timeout_sec", 3600))
+            resolved = await wait_for_intake_answers(session_id, hitl_timeout, watchdog)
+            qa_rows = await load_answered_qa(session_id)
+            if not resolved and not qa_rows:
+                await log_bus.emit(
+                    session_id,
+                    "log_entry",
+                    {
+                        "level": "warn",
+                        "agent_id": "intake",
+                        "message": "Intake timeout — proceeding with available context",
+                    },
+                )
+                state = {**state, "intake_complete": True, "status": "running"}
+                proceed = True
+                break
+
+            state = merge_answers_into_state(state, qa_rows)
+            state = {**state, "status": "running", "open_questions": []}
+            await update_session_status(session_id, "running")
+            if wd_state:
+                wd_state.status = "running"
+                wd_state.last_progress_at = time.time()
+            await log_bus.emit(
+                session_id,
+                "intake_complete",
+                {"ready": True, "answers_count": len(qa_rows)},
+            )
+            proceed = True
+
+        if state.get("current_agent") == "export":
+            state = {**state, **await _export_node(state)}
+            return
+
         max_steps = 200  # absolute safety limit
         step = 0
         while state["current_agent"] != "export" and step < max_steps:
@@ -453,6 +544,7 @@ async def run_graph(
         )
         state = {**state, "status": "failed"}
     finally:
+        clear_intake_event(session_id)
         clear_session(session_id)
         watchdog.unregister(session_id)
         final_status = state.get("status", "failed")

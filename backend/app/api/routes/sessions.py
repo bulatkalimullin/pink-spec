@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 
 from app.schemas.rules import (
     AnswerRequest,
+    BatchAnswersRequest,
     RecoverRequest,
     SessionControlRequest,
     StartSessionRequest,
@@ -140,6 +143,49 @@ async def submit_answer(session_id: str, body: AnswerRequest):
     return {"status": "answered"}
 
 
+@router.post("/{session_id}/answers/batch")
+async def submit_answers_batch(session_id: str, body: BatchAnswersRequest):
+    from app.services.intake import notify_intake_resolved
+    from app.services.session import update_session_status
+
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    open_qs = await get_open_questions(session_id)
+    open_ids = {q["id"] for q in open_qs}
+    if not open_ids:
+        return {"status": "no_open_questions", "remaining": 0}
+
+    missing = [qid for qid in open_ids if qid not in body.answers]
+    if missing:
+        raise HTTPException(
+            400,
+            f"Answer all questions before submitting. Missing: {', '.join(missing[:5])}",
+        )
+
+    for qid, answer in body.answers.items():
+        if qid not in open_ids:
+            continue
+        await answer_question(session_id, qid, answer)
+        watchdog.deliver_answer(qid, answer)
+
+    notify_intake_resolved(session_id)
+    remaining = await get_open_questions(session_id)
+    if not remaining:
+        await update_session_status(session_id, "running")
+        wd = watchdog.get_state(session_id)
+        if wd:
+            wd.status = "running"
+        await log_bus.emit(
+            session_id,
+            "intake_complete",
+            {"ready": True, "answers_count": len(body.answers), "from_user": True},
+        )
+
+    return {"status": "answered", "remaining": len(remaining)}
+
+
 @router.post("/{session_id}/resume")
 async def resume_session(session_id: str):
     raise HTTPException(
@@ -205,6 +251,8 @@ async def get_session_control(session_id: str):
         ),
         "until_confident": overrides.get("until_confident", l4.get("until_confident", True)),
         "overrides_active": bool(overrides),
+        "status": session["status"],
+        "paused": session["status"] == "paused",
     }
 
 
@@ -223,6 +271,28 @@ async def session_control(session_id: str, body: SessionControlRequest):
 
     if action:
         enqueue(session_id, {"action": action})
+        if action == "pause":
+            wd = watchdog.get_state(session_id)
+            if wd:
+                wd.status = "paused"
+            from app.services.session import update_session_status
+
+            await update_session_status(session_id, "paused")
+        elif action == "resume":
+            wd = watchdog.get_state(session_id)
+            if wd:
+                wd.status = "running"
+            from app.services.session import update_session_status
+
+            await update_session_status(session_id, "running")
+        elif action == "cancel":
+            from app.services.session_runner import session_runner
+
+            session_runner.request_cancel(session_id)
+        elif action == "force_export":
+            from app.services.session_runner import session_runner
+
+            session_runner.request_cancel(session_id)
 
     overrides = get_overrides(session_id)
     await log_bus.emit(

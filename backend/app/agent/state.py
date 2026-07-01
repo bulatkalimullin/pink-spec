@@ -65,6 +65,11 @@ class MultiAgentState(TypedDict):
     current_step: dict[str, Any] | None
     pipeline_reasoning: str
 
+    # Refinement patching
+    refinement_issues: dict[str, list[dict[str, Any]]]
+    patch_unchanged_counts: dict[str, int]
+    refinement_pending: bool
+
 
 def initial_state(
     session_id: str,
@@ -141,4 +146,7 @@ def initial_state(
         pipeline_planned=pipeline_planned,
         current_step=None,
         pipeline_reasoning="",
+        refinement_issues={},
+        patch_unchanged_counts={},
+        refinement_pending=False,
     )

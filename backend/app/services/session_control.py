@@ -161,6 +161,9 @@ def trigger_replan(state: MultiAgentState) -> MultiAgentState:
         "pipeline_reasoning": "Re-planned by user request",
         "review_reports": [],
         "review_cycles": 0,
+        "refinement_pending": False,
+        "refinement_issues": {},
+        "patch_unchanged_counts": {},
         "current_agent": "supervisor",
         "current_step": None,
     }
