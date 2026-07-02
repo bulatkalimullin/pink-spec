@@ -17,6 +17,7 @@ import {
   exportSession,
   getSessionControl,
   recoverSession,
+  restartSession,
   sendSessionControl,
 } from "@/lib/api";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ const STATUS_LABELS: Record<string, string> = {
   waiting_user: "Ждёт ответы",
   paused: "На паузе",
   stuck: "Застряла",
+  interrupted: "Прервана",
   degraded: "Деградация",
   completed: "Завершена",
   completed_partial: "Частично",
@@ -43,6 +45,7 @@ const STATUS_COLORS: Record<string, string> = {
   waiting_user: "bg-sky-900/40 text-sky-300",
   paused: "bg-zinc-800 text-zinc-300",
   stuck: "bg-amber-900/40 text-amber-300",
+  interrupted: "bg-orange-900/40 text-orange-300",
   degraded: "bg-orange-900/40 text-orange-300",
   completed: "bg-emerald-900/40 text-emerald-300",
   completed_partial: "bg-amber-900/40 text-amber-300",
@@ -70,6 +73,9 @@ export default function AgentControlPanel({ sessionId }: Props) {
     sessionStatus
   );
   const canControl = ["running", "degraded", "paused", "stuck", "waiting_user"].includes(
+    sessionStatus
+  );
+  const canRestart = ["interrupted", "stuck", "completed_partial", "failed", "degraded"].includes(
     sessionStatus
   );
   const openCBs = Object.keys(circuitBreakers).filter((k) => circuitBreakers[k]);
@@ -109,6 +115,19 @@ export default function AgentControlPanel({ sessionId }: Props) {
       toast.success(`Recovery: ${action}`);
     } catch (e) {
       toast.error("Recovery failed", { description: String(e) });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const runRestart = async () => {
+    setLoading("restart");
+    try {
+      await restartSession(sessionId);
+      useSessionStore.setState({ sessionStatus: "running", isStuck: false, stuckReason: null });
+      toast.success("Пайплайн перезапущен");
+    } catch (e) {
+      toast.error("Не удалось перезапустить", { description: String(e) });
     } finally {
       setLoading(null);
     }
@@ -213,6 +232,26 @@ export default function AgentControlPanel({ sessionId }: Props) {
           </>
         )}
       </div>
+
+      {canRestart && (
+        <div className="rounded border border-orange-700/40 bg-orange-900/10 p-2 space-y-2">
+          <p className="text-xs text-orange-300">
+            Пайплайн остановлен. Перезапустите, чтобы продолжить с сохранёнными ответами.
+          </p>
+          <button
+            disabled={!!loading}
+            onClick={() => void runRestart()}
+            className="flex items-center gap-1.5 rounded border border-orange-700/50 px-2.5 py-1.5 text-xs text-orange-200 hover:bg-orange-900/30 disabled:opacity-50"
+          >
+            {loading === "restart" ? (
+              <RefreshCw className="h-3 w-3 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            Перезапустить пайплайн
+          </button>
+        </div>
+      )}
 
       {(isStuck || openCBs.length > 0) && (
         <div className="rounded border border-amber-700/40 bg-amber-900/10 p-2 space-y-2">

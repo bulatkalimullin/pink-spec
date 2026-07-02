@@ -93,7 +93,7 @@ async def init_providers(
     max_attempts: int = _PROVIDER_INIT_ATTEMPTS,
     delay_sec: float = _PROVIDER_INIT_DELAY_SEC,
 ) -> bool:
-    """Connect to Ollama. Returns True if real providers are ready."""
+    """Connect LLM + embeddings. Returns True if default LLM is ready."""
     global llm_provider, embedding_provider, settings
 
     settings = get_settings()
@@ -101,16 +101,28 @@ async def init_providers(
 
     from app.llm.hf_provider import build_embedding_provider, build_llm_provider
 
+    llm_ready = False
     for attempt in range(1, max_attempts + 1):
         try:
-            llm_provider = build_llm_provider(provider_cfg)
+            if settings.llm_provider == "yandexgpt":
+                if settings.yandex_credentials_configured():
+                    llm_provider = build_llm_provider(provider_cfg)
+                    llm_ready = True
+                else:
+                    logger.warning("yandexgpt_not_configured", attempt=attempt)
+            else:
+                llm_provider = build_llm_provider(provider_cfg)
+                llm_ready = True
+
             embedding_provider = build_embedding_provider(provider_cfg)
-            logger.info(
-                "providers_ready",
-                attempt=attempt,
-                ollama_base_url=settings.ollama_base_url,
-            )
-            return True
+            if llm_ready:
+                logger.info(
+                    "providers_ready",
+                    attempt=attempt,
+                    llm_provider=settings.llm_provider,
+                    ollama_base_url=settings.ollama_base_url,
+                )
+                return True
         except Exception as e:
             logger.warning(
                 "provider_init_failed",
@@ -124,16 +136,34 @@ async def init_providers(
     _use_stub_providers()
     logger.error(
         "providers_stub_active",
-        hint="Ollama unreachable — sessions will produce stub output until backend restarts",
+        hint="Configure Ollama or YandexGPT — sessions may fail until backend restarts",
     )
     return False
 
 
 async def ensure_providers() -> bool:
-    """Re-try Ollama if currently on stub (e.g. Ollama started after backend)."""
+    """Re-try providers if default LLM is on stub."""
     if not is_stub_provider(llm_provider):
         return True
     return await init_providers(max_attempts=3, delay_sec=1.0)
+
+
+def llm_health_info() -> dict:
+    if is_stub_provider(llm_provider):
+        return {
+            "mode": "stub",
+            "warning": "LLM provider unavailable at init — check Ollama or YandexGPT config",
+        }
+    if llm_provider is None:
+        return {"mode": "none"}
+    mode = getattr(llm_provider, "model_name", None) and (
+        "yandexgpt" if "yandex" in type(llm_provider).__name__.lower() else "ollama"
+    )
+    if hasattr(llm_provider, "model_name"):
+        return {"mode": mode or settings.llm_provider, "model": llm_provider.model_name}
+    if hasattr(llm_provider, "model"):
+        return {"mode": mode or settings.llm_provider, "model": llm_provider.model}
+    return {"mode": settings.llm_provider}
 
 
 @app.on_event("startup")
@@ -142,6 +172,9 @@ async def startup():
 
     settings = get_settings()
     await init_db()
+    from app.services.orphan_sessions import reconcile_orphaned_sessions
+
+    await reconcile_orphaned_sessions()
     await init_providers()
 
     from app.services.output_migration import migrate_output_folders
@@ -154,13 +187,6 @@ async def startup():
     asyncio.create_task(log_bus.run_persist_worker())
     asyncio.create_task(system_monitor.run())
     asyncio.create_task(watchdog.run())
-
-    from app.services.session_runner import session_runner
-
-    def _on_watchdog_stuck(session_id: str, _reason: str) -> None:
-        session_runner.request_cancel(session_id)
-
-    watchdog.on_stuck(_on_watchdog_stuck)
 
     from app.services.stats_aggregator import backfill_all_sessions, needs_startup_rebuild
 
@@ -175,15 +201,28 @@ async def health():
     info: dict = {"status": "ok", "version": "0.1.0"}
 
     if is_stub_provider(llm_provider):
-        info["llm"] = {
-            "mode": "stub",
-            "warning": "Ollama was unreachable at init — restart backend after Ollama is up",
-        }
+        info["llm"] = llm_health_info()
     elif llm_provider is not None:
-        if hasattr(llm_provider, "model_name"):
-            info["llm"] = {"mode": "ollama", "model": llm_provider.model_name}
-        elif hasattr(llm_provider, "model"):
-            info["llm"] = {"mode": "ollama", "model": llm_provider.model}
+        info["llm"] = llm_health_info()
+
+    info["llm_provider_default"] = settings.llm_provider
+    if settings.llm_provider == "yandexgpt":
+        info["yandexgpt"] = {
+            "model": settings.yandex_model,
+            "embedding_doc_model": settings.yandex_embedding_doc_model,
+            "embedding_query_model": settings.yandex_embedding_query_model,
+            "folder_id_configured": bool(settings.yandex_folder_id),
+            "credentials_configured": settings.yandex_credentials_configured(),
+            "auth": (
+                "api_key"
+                if settings.yandex_api_key
+                else "passport_token"
+                if settings.yandex_passport_token
+                else "iam_token"
+                if settings.yandex_iam_token
+                else "none"
+            ),
+        }
 
     try:
         from app.llm.ollama_provider import check_ollama

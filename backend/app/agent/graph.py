@@ -228,11 +228,12 @@ async def run_graph(
 
     from app.agent.l4_guards import apply_l4_runtime_guards
     from app.config import get_settings
+    from app.llm.provider_resolver import active_llm_model_name
 
     rules, l4_warnings = apply_l4_runtime_guards(
         rules,
         global_llm_max_tokens=get_settings().llm_max_tokens,
-        active_llm_model=get_settings().ollama_llm_model,
+        active_llm_model=active_llm_model_name(rules),
     )
 
     state = initial_state(
@@ -327,11 +328,21 @@ async def run_graph(
     )
 
     try:
+        wd_state.mark_agent_started("intake")
         state, proceed = await run_intake_phase(state, llm_provider)
+        if not proceed:
+            from app.services.session import get_open_questions
+            from app.services.session_runner import session_runner
+
+            session_runner.clear_cancel(session_id)
         while not proceed:
             if cancel_event and cancel_event.is_set():
-                state = {**state, "current_agent": "export", "status": "degraded"}
-                break
+                open_qs = await get_open_questions(session_id)
+                if open_qs:
+                    session_runner.clear_cancel(session_id)
+                else:
+                    state = {**state, "current_agent": "export", "status": "degraded"}
+                    break
 
             await emit_stage_changed(
                 state,
@@ -371,6 +382,11 @@ async def run_graph(
                 {"ready": True, "answers_count": len(qa_rows)},
             )
             proceed = True
+
+        if wd_state:
+            wd_state.mark_agent_completed()
+            if wd_state.current_agent == "intake":
+                wd_state.current_agent = "supervisor"
 
         if state.get("current_agent") == "export":
             state = {**state, **await _export_node(state)}

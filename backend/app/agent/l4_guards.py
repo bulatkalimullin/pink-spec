@@ -40,7 +40,14 @@ def apply_l4_runtime_guards(
         ollama["timeout_sec"] = 300
 
     effective_tokens = int(ollama.get("max_tokens", 8192))
-    model = str(ollama.get("llm_model") or active_llm_model or "")
+    llm_provider = str(rules.get("llm_provider", "ollama"))
+    if llm_provider == "yandexgpt":
+        yandex = dict(rules.get("yandexgpt") or {})
+        model = str(yandex.get("model") or active_llm_model or "")
+        if yandex.get("max_tokens") is not None:
+            effective_tokens = int(yandex["max_tokens"])
+    else:
+        model = str(ollama.get("llm_model") or active_llm_model or "")
 
     if global_llm_max_tokens is not None and global_llm_max_tokens < 8192:
         warnings.append(

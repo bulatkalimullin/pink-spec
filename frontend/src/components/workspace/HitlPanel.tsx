@@ -24,6 +24,7 @@ export default function HitlPanel({ sessionId, onCountChange }: Props) {
   const { sessionStatus, intakeSummary } = useSessionStore();
   const [questions, setQuestions] = useState<OpenQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -47,9 +48,20 @@ export default function HitlPanel({ sessionId, onCountChange }: Props) {
   }, [fetchQuestions]);
 
   const allAnswered = useMemo(
-    () => questions.every((q) => (answers[q.id] ?? "").trim().length > 0),
-    [questions, answers]
+    () =>
+      questions.every((q) => {
+        const custom = (customAnswers[q.id] ?? "").trim();
+        if (custom.length > 0) return true;
+        return (answers[q.id] ?? "").trim().length > 0;
+      }),
+    [questions, answers, customAnswers]
   );
+
+  const resolveAnswer = (q: OpenQuestion) => {
+    const custom = (customAnswers[q.id] ?? "").trim();
+    if (custom.length > 0) return custom;
+    return (answers[q.id] ?? "").trim();
+  };
 
   const handleSubmitAll = async () => {
     if (!allAnswered) {
@@ -60,7 +72,7 @@ export default function HitlPanel({ sessionId, onCountChange }: Props) {
     try {
       const payload: Record<string, string> = {};
       for (const q of questions) {
-        payload[q.id] = answers[q.id].trim();
+        payload[q.id] = resolveAnswer(q);
       }
       const res = await submitAnswersBatch(sessionId, payload);
       if (!res.ok) {
@@ -70,6 +82,7 @@ export default function HitlPanel({ sessionId, onCountChange }: Props) {
       toast.success(t.workspace.submitSuccess);
       setQuestions([]);
       setAnswers({});
+      setCustomAnswers({});
       onCountChange?.(0);
     } catch (e) {
       toast.error(t.workspace.submitFailed, { description: String(e) });
@@ -131,24 +144,45 @@ export default function HitlPanel({ sessionId, onCountChange }: Props) {
               <p className="text-sm text-foreground leading-snug">{q.text}</p>
             </div>
 
-            {q.options.length > 0 ? (
-              <div className="space-y-1 pl-6">
-                {q.options.map((opt) => (
-                  <label
-                    key={opt}
-                    className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent cursor-pointer"
-                  >
-                    <input
-                      type="radio"
-                      name={`q-${q.id}`}
-                      value={opt}
-                      checked={answers[q.id] === opt}
-                      onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: opt }))}
-                      className="accent-primary"
-                    />
-                    {opt}
-                  </label>
-                ))}
+            {q.options.length >= 2 ? (
+              <div className="space-y-2 pl-6">
+                <div className="space-y-1">
+                  {q.options.map((opt) => (
+                    <label
+                      key={opt}
+                      className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent cursor-pointer"
+                    >
+                      <input
+                        type="radio"
+                        name={`q-${q.id}`}
+                        value={opt}
+                        checked={answers[q.id] === opt && !(customAnswers[q.id] ?? "").trim()}
+                        onChange={() => {
+                          setAnswers((prev) => ({ ...prev, [q.id]: opt }));
+                          setCustomAnswers((prev) => ({ ...prev, [q.id]: "" }));
+                        }}
+                        className="accent-primary"
+                      />
+                      {opt}
+                    </label>
+                  ))}
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] text-muted-foreground">{t.workspace.customAnswer}</p>
+                  <input
+                    type="text"
+                    placeholder={t.workspace.customAnswerPlaceholder}
+                    value={customAnswers[q.id] ?? ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setCustomAnswers((prev) => ({ ...prev, [q.id]: value }));
+                      if (value.trim()) {
+                        setAnswers((prev) => ({ ...prev, [q.id]: "" }));
+                      }
+                    }}
+                    className="w-full rounded border border-border bg-background px-3 py-2 text-xs focus:border-primary/50 focus:outline-none"
+                  />
+                </div>
               </div>
             ) : (
               <textarea

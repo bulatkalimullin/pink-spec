@@ -43,6 +43,49 @@ class Settings(BaseSettings):
     # LLM generation
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
     llm_max_tokens: int = Field(default=4096, alias="LLM_MAX_TOKENS")
+    llm_provider: Literal["ollama", "yandexgpt"] = Field(default="ollama", alias="LLM_PROVIDER")
+
+    # YandexGPT (secrets from env only)
+    yandex_api_key: str = Field(default="", alias="YANDEX_API_KEY")
+    yandex_passport_token: str = Field(default="", alias="YANDEX_PASSPORT_TOKEN")
+    yandex_iam_token: str = Field(default="", alias="YANDEX_IAM_TOKEN")
+    yandex_folder_id: str = Field(default="", alias="YANDEX_FOLDER_ID")
+    yandex_model: str = Field(default="yandexgpt-lite", alias="YANDEX_MODEL")
+    yandex_llm_fallbacks: str = Field(default="yandexgpt,yandexgpt-32k", alias="YANDEX_LLM_FALLBACKS")
+    yandex_timeout_sec: float = Field(default=120.0, alias="YANDEX_TIMEOUT_SEC")
+    yandex_embedding_doc_model: str = Field(default="text-search-doc", alias="YANDEX_EMBEDDING_DOC_MODEL")
+    yandex_embedding_query_model: str = Field(
+        default="text-search-query", alias="YANDEX_EMBEDDING_QUERY_MODEL"
+    )
+    yandex_embedding_fallback: Literal["doc", "none"] = Field(
+        default="doc", alias="YANDEX_EMBEDDING_FALLBACK"
+    )
+    yandex_embedding_fallback_doc_model: str = Field(
+        default="text-search-query", alias="YANDEX_EMBEDDING_FALLBACK_DOC_MODEL"
+    )
+    yandex_embedding_fallback_query_model: str = Field(
+        default="text-search-doc", alias="YANDEX_EMBEDDING_FALLBACK_QUERY_MODEL"
+    )
+
+    @field_validator("yandex_embedding_fallback", mode="before")
+    @classmethod
+    def normalize_yandex_embedding_fallback(cls, v: object) -> str:
+        if v is None or str(v).strip() == "":
+            return "doc"
+        normalized = str(v).strip().lower()
+        if normalized == "keyword":
+            return "doc"
+        if normalized not in ("doc", "none"):
+            raise ValueError("YANDEX_EMBEDDING_FALLBACK must be 'doc' or 'none'")
+        return normalized
+
+    def yandex_llm_fallback_models(self) -> list[str]:
+        return [m.strip() for m in self.yandex_llm_fallbacks.split(",") if m.strip()]
+
+    def yandex_credentials_configured(self) -> bool:
+        return bool(self.yandex_folder_id) and bool(
+            self.yandex_api_key or self.yandex_passport_token or self.yandex_iam_token
+        )
 
     # Storage
     sqlite_path: str = Field(default="./data/pink_spec.db", alias="SQLITE_PATH")
@@ -65,6 +108,7 @@ class Settings(BaseSettings):
 
     def provider_cfg(self) -> dict[str, Any]:
         return {
+            "llm_provider": self.llm_provider,
             "ollama_base_url": self.ollama_base_url,
             "ollama_llm_model": self.ollama_llm_model,
             "ollama_llm_fallbacks": self.ollama_fallback_models(),
@@ -74,6 +118,18 @@ class Settings(BaseSettings):
             "ollama_timeout_sec": self.ollama_timeout_sec,
             "temperature": self.llm_temperature,
             "max_tokens": self.llm_max_tokens,
+            "yandex_api_key": self.yandex_api_key,
+            "yandex_passport_token": self.yandex_passport_token,
+            "yandex_iam_token": self.yandex_iam_token,
+            "yandex_folder_id": self.yandex_folder_id,
+            "yandex_model": self.yandex_model,
+            "yandex_llm_fallbacks": self.yandex_llm_fallback_models(),
+            "yandex_timeout_sec": self.yandex_timeout_sec,
+            "yandex_embedding_doc_model": self.yandex_embedding_doc_model,
+            "yandex_embedding_query_model": self.yandex_embedding_query_model,
+            "yandex_embedding_fallback": self.yandex_embedding_fallback,
+            "yandex_embedding_fallback_doc_model": self.yandex_embedding_fallback_doc_model,
+            "yandex_embedding_fallback_query_model": self.yandex_embedding_fallback_query_model,
         }
 
     def monitoring_defaults(self) -> dict[str, Any]:
@@ -103,6 +159,7 @@ class Settings(BaseSettings):
     def public_dict(self) -> dict[str, Any]:
         """Safe snapshot for Settings UI (no secrets)."""
         return {
+            "llm_provider": self.llm_provider,
             "ollama_base_url": self.ollama_base_url,
             "ollama_llm_model": self.ollama_llm_model,
             "ollama_llm_fallbacks": self.ollama_llm_fallbacks,
@@ -110,6 +167,14 @@ class Settings(BaseSettings):
             "ollama_embedding_fallback": self.ollama_embedding_fallback,
             "ollama_keep_alive": self.ollama_keep_alive,
             "ollama_timeout_sec": self.ollama_timeout_sec,
+            "yandex_model": self.yandex_model,
+            "yandex_embedding_doc_model": self.yandex_embedding_doc_model,
+            "yandex_embedding_query_model": self.yandex_embedding_query_model,
+            "yandex_folder_id_configured": bool(self.yandex_folder_id),
+            "yandex_api_key_configured": bool(self.yandex_api_key),
+            "yandex_passport_token_configured": bool(self.yandex_passport_token),
+            "yandex_iam_token_configured": bool(self.yandex_iam_token),
+            "yandex_credentials_configured": self.yandex_credentials_configured(),
             "llm_temperature": self.llm_temperature,
             "llm_max_tokens": self.llm_max_tokens,
             "monitor_interval_sec": self.monitor_interval_sec,

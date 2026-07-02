@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Zap, ChevronRight, Loader2 } from "lucide-react";
 import LanguageSelector from "@/components/LanguageSelector";
+import ProviderSelector from "@/components/ProviderSelector";
 import { useI18n } from "@/i18n/I18nProvider";
 import { createAndStartSession } from "@/lib/api";
-import { loadRulesWithLanguage } from "@/lib/rulesLanguage";
+import { loadRulesWithProvider } from "@/lib/llmProvider";
 import { useSessionStore } from "@/stores/sessionStore";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -35,7 +36,7 @@ export default function Home() {
     setLoading(true);
     reset();
     try {
-      let rules = loadRulesWithLanguage(specLevel);
+      let rules = loadRulesWithProvider(specLevel);
       if (specLevel === "L4") {
         const pipeline = (rules.pipeline as Record<string, unknown>) || {};
         rules = {
@@ -80,6 +81,8 @@ export default function Home() {
           </div>
 
           <LanguageSelector showHint />
+
+          <ProviderSelector showHint />
 
           <div className="space-y-2">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">

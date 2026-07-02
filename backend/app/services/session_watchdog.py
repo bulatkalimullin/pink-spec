@@ -77,6 +77,9 @@ class SessionState:
             return True
         if self.status not in ("running", "degraded"):
             return False
+        # Intake LLM can be slow (local Ollama); stuck is a UI hint, not a kill signal.
+        if self.current_agent == "intake":
+            return False
         return (time.time() - self.last_progress_at) > self.stuck_detection_sec
 
     def stuck_since_sec(self) -> int | None:
@@ -87,7 +90,7 @@ class SessionState:
         return None
 
     def is_agent_timed_out(self) -> bool:
-        if self.current_agent in ("supervisor", "export"):
+        if self.current_agent in ("supervisor", "export", "intake"):
             return False
         return (time.time() - self.agent_started_at) > self.agent_timeout_sec
 

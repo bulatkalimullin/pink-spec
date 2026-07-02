@@ -125,6 +125,15 @@ async def run_intake_phase(
         )
         return state, False
 
+    answered = await load_answered_qa(session_id)
+    if answered:
+        await log_bus.emit(
+            session_id,
+            "intake_complete",
+            {"ready": True, "answers_count": len(answered), "resumed": True},
+        )
+        return merge_answers_into_state(state, answered), True
+
     from app.agent.agents.intake_agent import IntakeAgent
 
     agent = IntakeAgent(llm=llm_provider)
@@ -166,6 +175,14 @@ async def run_intake_phase(
 
     await update_session_status(session_id, "waiting_user")
     intake_event(session_id).clear()
+
+    from app.services.session_watchdog import watchdog
+
+    wd = watchdog.get_state(session_id)
+    if wd:
+        wd.status = "waiting_user"
+        wd.stuck_detected_at = None
+        wd.last_progress_at = time.time()
 
     await log_bus.emit(
         session_id,

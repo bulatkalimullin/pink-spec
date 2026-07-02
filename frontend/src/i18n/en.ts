@@ -68,6 +68,8 @@ export const en: Messages = {
     submitSuccess: "Answers submitted — agent will continue",
     submitFailed: "Failed to submit answers",
     yourAnswer: "Your answer…",
+    customAnswer: "Custom answer",
+    customAnswerPlaceholder: "Enter your own answer if none of the options fit…",
     submit: "Submit all answers",
     submitting: "Submitting…",
   },
@@ -76,5 +78,12 @@ export const en: Messages = {
     saved: "Rules saved to local storage",
     invalidJson: "Invalid JSON",
     valid: "Valid JSON",
+  },
+  llm: {
+    label: "LLM provider",
+    hint: "Chosen model applies to this session (stored in rules)",
+    loading: "Loading models…",
+    ollamaUnavailable: "Ollama is not reachable — start Ollama or check OLLAMA_BASE_URL",
+    yandexUnavailable: "YandexGPT is not configured — set YANDEX_FOLDER_ID and YANDEX_API_KEY or YANDEX_PASSPORT_TOKEN in .env",
   },
 } satisfies Messages;

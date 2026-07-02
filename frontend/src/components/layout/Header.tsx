@@ -27,6 +27,8 @@ const STATUS_COLORS: Record<string, string> = {
   completed: "text-pink-400",
   completed_partial: "text-orange-400",
   degraded: "text-orange-400",
+  interrupted: "text-orange-400",
+  waiting_user: "text-sky-400",
   paused: "text-sky-400",
   pending: "text-zinc-400",
 };
@@ -38,6 +40,8 @@ const STATUS_DOT_COLORS: Record<string, string> = {
   completed: "bg-pink-400",
   completed_partial: "bg-orange-400",
   degraded: "bg-orange-400",
+  interrupted: "bg-orange-400",
+  waiting_user: "bg-sky-400",
   paused: "bg-sky-400",
   pending: "bg-zinc-400",
 };

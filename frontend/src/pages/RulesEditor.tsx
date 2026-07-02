@@ -10,6 +10,7 @@ import { toast } from "sonner";
 const DEFAULT_RULES = {
   schema_version: "1.0",
   spec_level: "L2",
+  llm_provider: "ollama",
   project: { name: "my-project", domain: "general", idea_summary: null },
   constraints: {
     stack: { backend: [], frontend: [], forbidden: [] },
@@ -34,6 +35,18 @@ const DEFAULT_RULES = {
     temperature: 0.2,
     max_tokens: 4096,
     keep_alive: "5m",
+    timeout_sec: 120,
+  },
+  yandexgpt: {
+    model: "yandexgpt-lite",
+    fallback_models: ["yandexgpt", "yandexgpt-32k"],
+    embedding_doc_model: "text-search-doc",
+    embedding_query_model: "text-search-query",
+    embedding_fallback: "doc",
+    embedding_fallback_query_model: "text-search-doc",
+    embedding_fallback_doc_model: "text-search-query",
+    temperature: 0.2,
+    max_tokens: 4096,
     timeout_sec: 120,
   },
   rag: {

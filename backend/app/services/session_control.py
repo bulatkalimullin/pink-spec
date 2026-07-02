@@ -97,7 +97,7 @@ def apply_control_directives(state: MultiAgentState, directives: list[dict[str, 
                 remove_artifact(session_id, ak)
             from app.services.session_runner import session_runner
 
-            session_runner.request_cancel(session_id)
+            session_runner.cancel_agent(session_id)
             state = {**state, "agent_outputs": outputs, "artifacts": artifacts}
         elif action == "restart_from" and directive.get("target_agent"):
             target = directive["target_agent"]
@@ -117,7 +117,7 @@ def apply_control_directives(state: MultiAgentState, directives: list[dict[str, 
                         remove_artifact(session_id, ak)
             from app.services.session_runner import session_runner
 
-            session_runner.request_cancel(session_id)
+            session_runner.cancel_agent(session_id)
             state = {
                 **state,
                 "agent_outputs": outputs,

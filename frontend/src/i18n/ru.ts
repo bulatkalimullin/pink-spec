@@ -75,7 +75,16 @@ export const ru: Messages = {
     submitSuccess: "Ответы отправлены — агент продолжит работу",
     submitFailed: "Не удалось отправить ответы",
     yourAnswer: "Ваш ответ…",
+    customAnswer: "Свой вариант",
+    customAnswerPlaceholder: "Введите свой ответ, если ни один вариант не подходит…",
     submit: "Отправить все ответы",
     submitting: "Отправка…",
+  },
+  llm: {
+    label: "LLM-провайдер",
+    hint: "Выбранная модель применится к этой сессии (сохраняется в rules)",
+    loading: "Загрузка моделей…",
+    ollamaUnavailable: "Ollama недоступна — запусти Ollama или проверь OLLAMA_BASE_URL",
+    yandexUnavailable: "YandexGPT не настроен — задай YANDEX_FOLDER_ID и YANDEX_API_KEY или YANDEX_PASSPORT_TOKEN в .env",
   },
 };

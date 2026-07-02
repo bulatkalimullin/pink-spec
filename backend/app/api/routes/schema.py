@@ -9,6 +9,19 @@ from app.services.language_validator import SUPPORTED_LANGUAGES
 
 router = APIRouter(prefix="/api/v1", tags=["schema"])
 
+OLLAMA_MODEL_HINTS = [
+    "qwen2.5:7b",
+    "llama3.2",
+    "gemma3:4b",
+    "mistral",
+]
+
+YANDEX_MODELS = [
+    {"id": "yandexgpt-lite", "label": "YandexGPT Lite", "description": "Быстрая модель для черновиков"},
+    {"id": "yandexgpt", "label": "YandexGPT Pro", "description": "Основная модель"},
+    {"id": "yandexgpt-32k", "label": "YandexGPT 32k", "description": "Большой контекст"},
+]
+
 
 @router.get("/schema/rules")
 async def get_rules_schema():
@@ -22,6 +35,51 @@ async def get_supported_languages():
             {"code": code, **meta} for code, meta in SUPPORTED_LANGUAGES.items()
         ],
         "default": "en",
+    }
+
+
+@router.get("/llm-providers")
+async def get_llm_providers():
+    from app.config import get_settings
+    from app.llm.ollama_provider import check_ollama
+
+    settings = get_settings()
+    ollama_models: list[str] = []
+    ollama_reachable = False
+    try:
+        tags = await check_ollama(settings.ollama_base_url)
+        ollama_reachable = True
+        ollama_models = [m.get("name", "") for m in tags.get("models", []) if m.get("name")]
+    except Exception:
+        pass
+
+    return {
+        "default": settings.llm_provider,
+        "providers": [
+            {
+                "id": "ollama",
+                "label": "Ollama (local)",
+                "description": "Локальные модели через Ollama",
+                "available": ollama_reachable,
+                "models": ollama_models or OLLAMA_MODEL_HINTS,
+                "default_model": settings.ollama_llm_model,
+                "config_key": "ollama",
+            },
+            {
+                "id": "yandexgpt",
+                "label": "YandexGPT (cloud)",
+                "description": "Yandex Cloud Foundation Models (LLM + embeddings)",
+                "available": settings.yandex_credentials_configured(),
+                "models": YANDEX_MODELS,
+                "default_model": settings.yandex_model,
+                "config_key": "yandexgpt",
+                "requires_env": ["YANDEX_FOLDER_ID", "YANDEX_API_KEY|YANDEX_PASSPORT_TOKEN"],
+                "embeddings": {
+                    "doc_model": settings.yandex_embedding_doc_model,
+                    "query_model": settings.yandex_embedding_query_model,
+                },
+            },
+        ],
     }
 
 

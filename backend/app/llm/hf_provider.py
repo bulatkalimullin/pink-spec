@@ -67,6 +67,15 @@ class OllamaLLMFallback:
 
 
 def build_llm_provider(cfg: dict) -> LLMProvider:
+    provider = str(cfg.get("llm_provider", "ollama")).lower()
+    if provider == "yandexgpt":
+        from app.llm.yandexgpt_provider import build_yandexgpt_provider
+
+        return build_yandexgpt_provider(cfg)
+    return _build_ollama_llm_provider(cfg)
+
+
+def _build_ollama_llm_provider(cfg: dict) -> LLMProvider:
     import httpx
 
     base_url: str = cfg.get("ollama_base_url", "http://localhost:11434")
@@ -114,6 +123,19 @@ def build_llm_provider(cfg: dict) -> LLMProvider:
 
 
 def build_embedding_provider(cfg: dict) -> EmbeddingProvider:
+    provider = str(cfg.get("llm_provider", "ollama")).lower()
+    if provider == "yandexgpt":
+        return _build_yandex_embedding_provider(cfg)
+    return _build_ollama_embedding_provider(cfg)
+
+
+def _build_yandex_embedding_provider(cfg: dict) -> EmbeddingProvider:
+    from app.llm.yandex_embedding_provider import build_yandex_embedding_provider
+
+    return build_yandex_embedding_provider(cfg)
+
+
+def _build_ollama_embedding_provider(cfg: dict) -> EmbeddingProvider:
     base_url: str = cfg.get("ollama_base_url", "http://localhost:11434")
     model: str | None = cfg.get("ollama_embedding_model")
     fallback: str = cfg.get("ollama_embedding_fallback", "keyword")

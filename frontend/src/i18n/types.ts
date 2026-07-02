@@ -27,4 +27,11 @@ export type Messages = {
   settings: Record<string, string>;
   rules: Record<string, string>;
   workspace: Record<string, string>;
+  llm: {
+    label: string;
+    hint: string;
+    loading: string;
+    ollamaUnavailable: string;
+    yandexUnavailable: string;
+  };
 };

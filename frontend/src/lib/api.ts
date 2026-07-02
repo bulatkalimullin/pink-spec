@@ -46,6 +46,28 @@ export async function getLanguages() {
   return r.json();
 }
 
+export interface LlmProviderInfo {
+  id: "ollama" | "yandexgpt";
+  label: string;
+  description: string;
+  available: boolean;
+  models: Array<string | { id: string; label?: string; description?: string }>;
+  default_model: string;
+  config_key: string;
+  requires_env?: string[];
+}
+
+export interface LlmProvidersResponse {
+  default: string;
+  providers: LlmProviderInfo[];
+}
+
+export async function getLlmProviders(): Promise<LlmProvidersResponse> {
+  const r = await fetch(`${BASE}/llm-providers`);
+  if (!r.ok) throw new Error("Failed to load LLM providers");
+  return r.json();
+}
+
 export async function submitAnswer(sessionId: string, questionId: string, answer: unknown) {
   return fetch(`${BASE}/sessions/${sessionId}/answers`, {
     method: "POST",
@@ -68,6 +90,15 @@ export async function recoverSession(sessionId: string, action: string, targetAg
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, target_agent: targetAgent }),
   });
+}
+
+export async function restartSession(sessionId: string) {
+  const r = await fetch(`${BASE}/sessions/${sessionId}/restart`, { method: "POST" });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(detail || `Restart failed: ${r.statusText}`);
+  }
+  return r.json();
 }
 
 export interface SessionControlPayload {

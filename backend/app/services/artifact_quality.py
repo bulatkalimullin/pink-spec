@@ -75,7 +75,8 @@ def find_duplicate_artifact(
 
 def load_existing_artifact_texts(session_id: str, exclude_key: str | None = None) -> dict[str, str]:
     """Load on-disk artifact bodies for duplicate comparison."""
-    from app.services.artifact_store import load_manifest_file, read_artifact
+    from app.services.artifact_store import load_manifest_file
+    from app.services.export import read_artifact
 
     manifest = load_manifest_file(session_id)
     artifacts = manifest.get("artifacts") or {}

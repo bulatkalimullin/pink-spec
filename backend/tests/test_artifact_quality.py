@@ -6,6 +6,7 @@ from app.services.artifact_quality import (
     deduplicate_tasks,
     extract_assumptions,
     inject_nfr_from_intake,
+    load_existing_artifact_texts,
     normalize_embedding_vector,
     validate_artifact_key,
 )
@@ -78,3 +79,27 @@ def test_review_issues_plateau():
     assert review_issues_plateau(reports, window=3) is True
     reports[-1]["passed"] = True
     assert review_issues_plateau(reports, window=3) is False
+
+
+def test_load_existing_artifact_texts_uses_export_reader(tmp_path, monkeypatch):
+    from app.services import export as export_mod
+    from app.services.artifact_store import init_session_output, save_artifact
+
+    session_id = "sess-load-texts"
+    monkeypatch.setattr(export_mod, "OUTPUT_ROOT", tmp_path)
+
+    async def noop_save_manifest(_sid: str, _manifest: dict) -> None:
+        pass
+
+    monkeypatch.setattr("app.services.artifact_store.save_manifest", noop_save_manifest)
+
+    import asyncio
+
+    init_session_output(session_id)
+    asyncio.run(
+        save_artifact(session_id, "product_spec", "# Product\n\n**Artifact Key:** product_spec\n\nBody")
+    )
+
+    texts = load_existing_artifact_texts(session_id)
+    assert "product_spec" in texts
+    assert "Body" in texts["product_spec"]

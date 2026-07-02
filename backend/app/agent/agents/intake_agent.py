@@ -9,6 +9,7 @@ from typing import Any
 
 from app.agent.agents.base import BaseAgent
 from app.agent.state import MultiAgentState
+from app.services.intake_options import normalize_intake_options
 from app.services.language_validator import (
     output_language_instruction,
     should_validate_language,
@@ -35,7 +36,12 @@ Output ONLY valid JSON:
 Rules:
 - Set ready=true only if you can proceed without guessing critical product decisions.
 - If ready=false, ask ALL missing questions at once (2-8 questions). Do not ask one-by-one.
-- Use options array when a finite set of answers exists; use [] for free-text questions.
+- For multiple-choice questions: options must be 2-8 CONCRETE short answer labels
+  (e.g. "Начинающие разработчики", "Студенты", "Web", "Mobile").
+- NEVER put meta-instructions in options (forbidden: "выбрать из списка", "select from list",
+  "другое", "other", "свой вариант"). The UI provides a custom-answer field separately.
+- NEVER use a single-item options array. One choice is invalid — use options: [] instead.
+- For open-ended questions use options: [] (free text). Do not duplicate the question text in options.
 - Mark blocking unknowns as critical or high priority.
 - questions array must be empty when ready=true.
 - Write summary and every question "text" in the configured OUTPUT LANGUAGE.
@@ -78,12 +84,33 @@ class IntakeAgent(BaseAgent):
             },
         ]
 
+        output_lang = str((rules.get("output") or {}).get("language", "en"))
+
         await self._log(session_id, "info", "Analyzing idea for missing information...")
         raw = await self._generate(state, messages)
-        result = _parse_intake_result(raw, max_questions)
+        result = _parse_intake_result(raw, max_questions, output_lang)
+
+        if result.get("options_invalid"):
+            await self._log(session_id, "warn", "Intake options invalid; regenerating")
+            repair_messages = [
+                *messages,
+                {"role": "assistant", "content": raw},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your JSON has invalid options. Each question must use either "
+                        "options: [] for free text, or options with 2-8 concrete answer labels. "
+                        "Never use meta-phrases like 'выбрать из списка', 'select from list', "
+                        "'другое', or single-item options arrays. "
+                        "Regenerate ONLY valid JSON."
+                    ),
+                },
+            ]
+            raw = await self._generate(state, repair_messages)
+            result = _parse_intake_result(raw, max_questions, output_lang)
 
         if should_validate_language(rules) and result.get("questions"):
-            expected = str((rules.get("output") or {}).get("language", "en"))
+            expected = output_lang
             violations = validate_intake_questions(result["questions"], expected)
             if violations:
                 await self._log(
@@ -105,12 +132,12 @@ class IntakeAgent(BaseAgent):
                     },
                 ]
                 raw = await self._generate(state, repair_messages)
-                result = _parse_intake_result(raw, max_questions)
+                result = _parse_intake_result(raw, max_questions, output_lang)
 
         return result
 
 
-def _parse_intake_result(raw: str, max_questions: int) -> dict[str, Any]:
+def _parse_intake_result(raw: str, max_questions: int, language: str = "en") -> dict[str, Any]:
     raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
     try:
         data = json.loads(raw)
@@ -135,15 +162,26 @@ def _parse_intake_result(raw: str, max_questions: int) -> dict[str, Any]:
         text = str(q.get("text", "")).strip()
         if not text:
             continue
+        raw_options = q.get("options") or []
+        raw_count = len(raw_options) if isinstance(raw_options, list) else 0
+        options = normalize_intake_options(raw_options, language)
         normalized.append(
             {
                 "id": str(q.get("id") or uuid.uuid4()),
                 "text": text,
                 "priority": q.get("priority", "high"),
-                "options": q.get("options") or [],
+                "options": options,
                 "required": q.get("required", True),
+                "_raw_options_count": raw_count,
             }
         )
+
+    options_invalid = any(
+        q.get("_raw_options_count", 0) > 0 and not q.get("options") for q in normalized
+    )
+
+    for q in normalized:
+        q.pop("_raw_options_count", None)
 
     if normalized:
         ready = False
@@ -151,4 +189,5 @@ def _parse_intake_result(raw: str, max_questions: int) -> dict[str, Any]:
         "ready": ready,
         "summary": str(data.get("summary", "")),
         "questions": normalized,
+        "options_invalid": options_invalid,
     }

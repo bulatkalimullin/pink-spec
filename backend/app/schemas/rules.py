@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -109,6 +109,24 @@ class OllamaConfig(BaseModel):
     timeout_sec: int = Field(120, ge=10, le=600)
 
 
+class LLMProviderType(StrEnum):
+    ollama = "ollama"
+    yandexgpt = "yandexgpt"
+
+
+class YandexGPTConfig(BaseModel):
+    model: str = "yandexgpt-lite"
+    fallback_models: list[str] = Field(default_factory=lambda: ["yandexgpt", "yandexgpt-32k"])
+    embedding_doc_model: str = "text-search-doc"
+    embedding_query_model: str = "text-search-query"
+    embedding_fallback: Literal["doc", "none"] = "doc"
+    embedding_fallback_doc_model: str = "text-search-query"
+    embedding_fallback_query_model: str = "text-search-doc"
+    temperature: float = Field(0.2, ge=0.0, le=1.0)
+    max_tokens: int = Field(4096, ge=256, le=32768)
+    timeout_sec: int = Field(120, ge=10, le=600)
+
+
 class HFConfig(BaseModel):
     """Deprecated — kept for backward compatibility with old rules JSON."""
 
@@ -183,6 +201,7 @@ class ResilienceConfig(BaseModel):
 class Rules(BaseModel):
     schema_version: str = "1.0"
     spec_level: SpecLevel = SpecLevel.L2
+    llm_provider: LLMProviderType = LLMProviderType.ollama
     l4: L4Config = Field(default_factory=L4Config)
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     constraints: ConstraintsConfig = Field(default_factory=ConstraintsConfig)
@@ -190,6 +209,7 @@ class Rules(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     agent_rules: list[AgentRule] = Field(default_factory=list)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    yandexgpt: YandexGPTConfig = Field(default_factory=YandexGPTConfig)
     hf: HFConfig | None = None
     rag: RAGConfig = Field(default_factory=RAGConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)

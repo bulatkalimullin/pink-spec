@@ -51,13 +51,27 @@ class SessionRunner:
         task.add_done_callback(_done_callback)
         return run
 
+    def cancel_agent(self, session_id: str) -> bool:
+        """Interrupt the running agent without shutting down the graph."""
+        run = self._runs.get(session_id)
+        if not run:
+            return False
+        if run.agent_task and not run.agent_task.done():
+            run.agent_task.cancel()
+        return True
+
+    def clear_cancel(self, session_id: str) -> None:
+        run = self._runs.get(session_id)
+        if run:
+            run.cancel_event.clear()
+
     def request_cancel(self, session_id: str) -> bool:
+        """Request graceful graph shutdown (export / degraded exit)."""
         run = self._runs.get(session_id)
         if not run:
             return False
         run.cancel_event.set()
-        if run.agent_task and not run.agent_task.done():
-            run.agent_task.cancel()
+        self.cancel_agent(session_id)
         return True
 
     def set_agent_task(self, session_id: str, agent_task: asyncio.Task | None) -> None:

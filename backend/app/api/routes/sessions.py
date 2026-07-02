@@ -59,44 +59,56 @@ async def start_session(
     if session["status"] not in ("pending", "failed"):
         raise HTTPException(409, f"Session already in state: {session['status']}")
 
-    from app.main import ensure_providers, is_stub_provider
+    from app.services.session_launcher import launch_session_graph
 
-    if not await ensure_providers():
-        raise HTTPException(
-            503,
-            "Ollama недоступен. Запусти Ollama (и ollama-proxy), затем перезапусти backend: "
-            "docker compose restart backend",
-        )
+    rules_dict = body.rules.model_dump()
+    await launch_session_graph(
+        session_id,
+        idea=body.idea,
+        rules_dict=rules_dict,
+        monitoring_cfg=body.rules.monitoring.model_dump(),
+    )
+    return {"session_id": session_id, "status": "starting"}
 
-    llm, emb = _get_providers()
-    if is_stub_provider(llm):
-        raise HTTPException(503, "LLM provider in stub mode — Ollama not connected")
 
-    async def _run(cancel_event: asyncio.Event):
-        from app.agent.graph import run_graph
+RESTARTABLE_STATUSES = frozenset(
+    {"interrupted", "stuck", "completed_partial", "failed", "degraded", "waiting_user"}
+)
 
-        monitoring_cfg = body.rules.monitoring.model_dump()
-        from app.services.system_monitor import system_monitor
 
-        system_monitor.add_session(session_id, monitoring_cfg)
-        try:
-            await run_graph(
-                session_id=session_id,
-                idea=body.idea,
-                rules=body.rules.model_dump(),
-                llm_provider=llm,
-                embedding_provider=emb,
-                cancel_event=cancel_event,
-            )
-        finally:
-            system_monitor.remove_session(session_id)
-
+@router.post("/{session_id}/restart")
+async def restart_session(session_id: str):
+    """Re-launch the agent graph after interrupt, stuck, or empty partial completion."""
+    from app.services.session import update_session_status
+    from app.services.session_launcher import launch_session_graph
     from app.services.session_runner import session_runner
 
-    try:
-        await session_runner.start(session_id, _run)
-    except RuntimeError as e:
-        raise HTTPException(409, str(e)) from e
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session_runner.is_running(session_id):
+        raise HTTPException(409, "Session graph is already running")
+    if session["status"] not in RESTARTABLE_STATUSES:
+        raise HTTPException(409, f"Cannot restart from status: {session['status']}")
+
+    rules = session.get("rules") or {}
+    monitoring_cfg = (rules.get("monitoring") or {})
+    await update_session_status(session_id, "running")
+    await launch_session_graph(
+        session_id,
+        idea=session["idea"],
+        rules_dict=rules,
+        monitoring_cfg=monitoring_cfg,
+    )
+    await log_bus.emit(
+        session_id,
+        "log_entry",
+        {
+            "level": "info",
+            "agent_id": "system",
+            "message": "Пайплайн перезапущен",
+        },
+    )
     return {"session_id": session_id, "status": "starting"}
 
 
@@ -117,6 +129,8 @@ async def get_session_endpoint(session_id: str):
 
 @router.get("/{session_id}/health")
 async def session_health(session_id: str):
+    from app.services.session_runner import session_runner
+
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -124,12 +138,14 @@ async def session_health(session_id: str):
     stuck = False
     if wd_state:
         stuck = wd_state.status == "stuck" or wd_state.is_stuck()
+    graph_active = session_runner.is_running(session_id)
     return {
         "status": session["status"],
         "stuck": stuck,
         "stuck_since_sec": wd_state.stuck_since_sec() if wd_state else None,
         "recoverable": session["status"] not in ("failed",),
         "current_agent": wd_state.current_agent if wd_state else None,
+        "graph_active": graph_active,
     }
 
 
