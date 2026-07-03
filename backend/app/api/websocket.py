@@ -9,14 +9,14 @@ from datetime import UTC, datetime
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.services.kafka_commands import publish_cancel, publish_control
 from app.services.log_bus import log_bus
-from app.services.session import answer_question, get_session
-from app.services.session_watchdog import watchdog
+from app.services.session import answer_question, get_session, update_session_status
 
 logger = structlog.get_logger(__name__)
 
-HEARTBEAT_INTERVAL = 30  # seconds
-RECONNECT_LOG_TAIL = 200  # events to send on reconnect
+HEARTBEAT_INTERVAL = 30
+RECONNECT_LOG_TAIL = 200
 
 
 async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
@@ -25,7 +25,6 @@ async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
 
     q = log_bus.subscribe(session_id)
 
-    # Send snapshot on reconnect (session history)
     session = await get_session(session_id)
     if session:
         history = await log_bus.get_log_history(session_id, from_seq=0, limit=RECONNECT_LOG_TAIL)
@@ -43,7 +42,6 @@ async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
             )
         )
 
-    # Heartbeat
     async def heartbeat() -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -52,7 +50,6 @@ async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
             except Exception:
                 break
 
-    # Send queue → client
     async def sender() -> None:
         while True:
             try:
@@ -63,7 +60,6 @@ async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
             except Exception:
                 break
 
-    # Receive client messages
     async def receiver() -> None:
         while True:
             try:
@@ -82,7 +78,7 @@ async def ws_session_handler(websocket: WebSocket, session_id: str) -> None:
     ]
 
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
         for task in tasks:
             task.cancel()
@@ -97,29 +93,31 @@ async def _handle_client_message(session_id: str, msg: dict) -> None:
         question_id = msg.get("question_id", "")
         answer = msg.get("answer")
         await answer_question(session_id, question_id, answer)
-        watchdog.deliver_answer(question_id, answer)
 
     elif msg_type == "cancel":
-        from app.services.session_runner import session_runner
-
-        state = watchdog.get_state(session_id)
-        if state:
-            state.status = "failed"
-        session_runner.request_cancel(session_id)
+        await publish_cancel(session_id)
         await log_bus.emit(
             session_id,
             "log_entry",
-            {"level": "warn", "agent_id": "system", "message": "Session cancelled by user"},
+            {"level": "warn", "agent_id": "system", "message": "Session cancel queued"},
         )
 
-    elif msg_type in ("pause", "resume"):
-        state = watchdog.get_state(session_id)
-        if state:
-            state.status = "paused" if msg_type == "pause" else "running"
+    elif msg_type == "pause":
+        await publish_control(session_id, {"action": "pause"})
+        await update_session_status(session_id, "paused")
         await log_bus.emit(
             session_id,
             "log_entry",
-            {"level": "info", "agent_id": "system", "message": f"Session {msg_type}d by user"},
+            {"level": "info", "agent_id": "system", "message": "Session paused by user"},
+        )
+
+    elif msg_type == "resume":
+        await publish_control(session_id, {"action": "resume"})
+        await update_session_status(session_id, "running")
+        await log_bus.emit(
+            session_id,
+            "log_entry",
+            {"level": "info", "agent_id": "system", "message": "Session resumed by user"},
         )
 
     elif msg_type == "request_snapshot":

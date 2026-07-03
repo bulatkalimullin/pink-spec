@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Cpu, Cloud } from "lucide-react";
+import OllamaConfigPanel from "@/components/OllamaConfigPanel";
 import { useI18n } from "@/i18n/I18nProvider";
-import { getLlmProviders, type LlmProvidersResponse } from "@/lib/api";
+import { getLlmProviders, type LlmProvidersResponse, type OllamaProviderInfo, type OllamaRulesConfig } from "@/lib/api";
 import {
   getStoredLlmProvider,
+  loadStoredOllamaConfig,
   setStoredLlmProvider,
   syncRulesLlmProvider,
+  syncRulesOllamaConfig,
   type LlmProviderId,
 } from "@/lib/llmProvider";
 import { cn } from "@/lib/utils";
@@ -23,60 +26,83 @@ function modelLabel(model: string | { id: string; label?: string }): string {
   return typeof model === "string" ? model : (model.label ?? model.id);
 }
 
+function isOllamaProvider(p: LlmProvidersResponse["providers"][number]): p is OllamaProviderInfo {
+  return p.id === "ollama";
+}
+
 export default function ProviderSelector({ className, showHint = false }: ProviderSelectorProps) {
   const { t } = useI18n();
   const [provider, setProvider] = useState<LlmProviderId>(getStoredLlmProvider);
-  const [model, setModel] = useState("");
+  const [yandexModel, setYandexModel] = useState("yandexgpt-lite");
+  const [ollamaConfig, setOllamaConfig] = useState<OllamaRulesConfig>(loadStoredOllamaConfig);
   const [data, setData] = useState<LlmProvidersResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const resp = await getLlmProviders();
-        if (cancelled) return;
-        setData(resp);
-        const current = getStoredLlmProvider();
-        const p = resp.providers.find((x) => x.id === current) ?? resp.providers[0];
-        const initialModel =
-          current === "yandexgpt"
-            ? (JSON.parse(localStorage.getItem("pink_spec_rules") || "{}") as { yandexgpt?: { model?: string } })
-                .yandexgpt?.model
-            : (JSON.parse(localStorage.getItem("pink_spec_rules") || "{}") as { ollama?: { llm_model?: string } })
-                .ollama?.llm_model;
-        const fallback = p?.default_model ?? modelId(p?.models?.[0] ?? "");
-        setModel(initialModel || fallback);
-      } catch {
-        if (!cancelled) setData(null);
-      } finally {
-        if (!cancelled) setLoading(false);
+  const fetchProviders = useCallback(async () => {
+    setLoading(true);
+    try {
+      const resp = await getLlmProviders();
+      setData(resp);
+      const ollama = resp.providers.find(isOllamaProvider);
+      if (ollama?.default_config && getStoredLlmProvider() === "ollama") {
+        const stored = loadStoredOllamaConfig();
+        if (!localStorage.getItem("pink_spec_rules")) {
+          setOllamaConfig(ollama.default_config);
+          syncRulesOllamaConfig(ollama.default_config);
+        } else {
+          setOllamaConfig(stored);
+        }
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      const yandexStored = JSON.parse(localStorage.getItem("pink_spec_rules") || "{}") as {
+        yandexgpt?: { model?: string };
+      };
+      if (yandexStored.yandexgpt?.model) setYandexModel(yandexStored.yandexgpt.model);
+    } catch {
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    void fetchProviders();
+  }, [fetchProviders]);
+
   const activeProvider = data?.providers.find((p) => p.id === provider);
-  const models = activeProvider?.models ?? [];
+  const ollamaProvider = data?.providers.find(isOllamaProvider) ?? null;
+  const yandexModels = activeProvider?.id === "yandexgpt" ? activeProvider.models : [];
   const unavailable = activeProvider && !activeProvider.available;
 
-  const apply = (nextProvider: LlmProviderId, nextModel: string) => {
+  const applyProvider = (nextProvider: LlmProviderId, nextYandexModel?: string) => {
     setProvider(nextProvider);
-    setModel(nextModel);
     setStoredLlmProvider(nextProvider);
-    syncRulesLlmProvider(nextProvider, nextModel);
+    if (nextProvider === "yandexgpt") {
+      const model = nextYandexModel ?? yandexModel;
+      setYandexModel(model);
+      syncRulesLlmProvider("yandexgpt", model);
+    } else {
+      syncRulesOllamaConfig(ollamaConfig);
+    }
   };
 
   const handleProviderChange = (next: LlmProviderId) => {
-    const p = data?.providers.find((x) => x.id === next);
-    const nextModel = p?.default_model ?? modelId(p?.models?.[0] ?? "");
-    apply(next, nextModel);
+    if (next === "yandexgpt") {
+      const p = data?.providers.find((x) => x.id === "yandexgpt");
+      const nextModel = p?.default_model ?? modelId(p?.models?.[0] ?? "yandexgpt-lite");
+      applyProvider("yandexgpt", nextModel);
+    } else {
+      applyProvider("ollama");
+    }
   };
 
-  const handleModelChange = (nextModel: string) => {
-    apply(provider, nextModel);
+  const handleYandexModelChange = (nextModel: string) => {
+    setYandexModel(nextModel);
+    applyProvider("yandexgpt", nextModel);
+  };
+
+  const handleOllamaChange = (next: OllamaRulesConfig) => {
+    setOllamaConfig(next);
+    syncRulesOllamaConfig(next);
   };
 
   return (
@@ -116,15 +142,31 @@ export default function ProviderSelector({ className, showHint = false }: Provid
 
       {loading ? (
         <p className="text-[10px] text-muted-foreground">{t.llm.loading}</p>
+      ) : provider === "ollama" ? (
+        <>
+          {!data && (
+            <p className="text-[10px] text-amber-500/90">{t.llm.providersLoadFailed}</p>
+          )}
+          <OllamaConfigPanel
+            provider={ollamaProvider}
+            config={ollamaConfig}
+            onChange={handleOllamaChange}
+            onRefresh={() => void fetchProviders()}
+            loading={loading}
+          />
+          {unavailable && (
+            <p className="text-[10px] text-amber-500/90">{t.llm.ollamaUnavailable}</p>
+          )}
+        </>
       ) : (
         <>
           <select
-            value={model}
-            onChange={(e) => handleModelChange(e.target.value)}
+            value={yandexModel}
+            onChange={(e) => handleYandexModelChange(e.target.value)}
             className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
-            disabled={models.length === 0}
+            disabled={yandexModels.length === 0}
           >
-            {models.map((m) => {
+            {yandexModels.map((m) => {
               const id = modelId(m);
               return (
                 <option key={id} value={id}>
@@ -134,13 +176,12 @@ export default function ProviderSelector({ className, showHint = false }: Provid
             })}
           </select>
           {unavailable && (
-            <p className="text-[10px] text-amber-500/90">
-              {provider === "yandexgpt" ? t.llm.yandexUnavailable : t.llm.ollamaUnavailable}
-            </p>
+            <p className="text-[10px] text-amber-500/90">{t.llm.yandexUnavailable}</p>
           )}
-          {showHint && <p className="text-[10px] text-muted-foreground">{t.llm.hint}</p>}
         </>
       )}
+
+      {showHint && <p className="text-[10px] text-muted-foreground">{t.llm.hint}</p>}
     </div>
   );
 }

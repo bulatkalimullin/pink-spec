@@ -35,6 +35,7 @@ class PipelineConfig(BaseModel):
     include_tasks: bool | None = None
     min_steps: int | None = Field(None, ge=1, le=50)
     min_deliverables: int | None = Field(None, ge=0, le=30)
+    max_replan_cycles: int = Field(2, ge=0, le=10)
 
 
 def step_to_dict(step: PipelineStep | dict[str, Any]) -> dict[str, Any]:

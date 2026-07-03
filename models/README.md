@@ -12,6 +12,17 @@ curl -fsSL https://ollama.com/install.sh | sh
 docker run -d --gpus all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
 ```
 
+## Важно
+
+| Путь в репозитории | Видит ли Ollama автоматически? |
+|--------------------|--------------------------------|
+| `models/llm/*.gguf` | **Нет** — нужен `make import-models` или `ollama create` |
+| `models/embeddings/*` | **Нет** — это HuggingFace, не формат Ollama. Используй `ollama pull` |
+| `ollama pull ...` | Да — попадает в `~/.ollama` и видно в `ollama list` |
+
+Том `./models:/models` в Docker подключается **только** с профилем `make up-ollama-docker`.
+При Ollama на хосте (default) папка `models/` — просто хранилище файлов на диске.
+
 ## LLM
 
 ```bash

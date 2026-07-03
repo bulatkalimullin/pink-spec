@@ -1,4 +1,4 @@
-.PHONY: up up-ollama-docker down build logs dev install install-backend install-frontend clean open help setup-mirrors ollama-pull ollama-list lint lint-backend lint-frontend sast ci
+.PHONY: up up-ollama-docker down build logs dev install install-backend install-frontend clean open help setup-mirrors ollama-pull ollama-list import-models import-models-docker check-ollama lint lint-backend lint-frontend sast ci
 
 # ─── Env + зеркала ─────────────────────────────────────────────────────────────
 -include mirrors.env
@@ -31,18 +31,38 @@ ollama-pull:
 	fi
 
 ollama-list:
-	docker compose exec ollama ollama list
+	docker compose exec ollama ollama list 2>/dev/null || ollama list
+
+## Импорт GGUF из models/llm/ в Ollama на хосте
+import-models:
+	bash scripts/import-project-models.sh
+
+## Импорт GGUF при Ollama в Docker (make up-ollama-docker)
+import-models-docker:
+	USE_DOCKER=1 bash scripts/import-project-models.sh
+
+check-ollama:
+	bash scripts/check-ollama-docker.sh
 
 # ─── Docker ───────────────────────────────────────────────────────────────────
 
 ## Собрать и запустить (Ollama на хосте — default)
 up:
 	@test -f .env || (echo "Создай .env: cp .env.example .env" && exit 1)
+	@echo "→ Kafka first (KRaft needs ~30-60s on cold start)..."
+	docker compose up -d kafka
+	@echo "→ Waiting for Kafka port..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		docker compose exec -T kafka sh -c 'nc -z localhost 9092' 2>/dev/null && break; \
+		sleep 5; \
+	done
 	docker compose up --build -d
 	@echo ""
-	@echo "  Frontend: http://localhost:$${FRONTEND_PORT:-3000}"
-	@echo "  Backend:  http://localhost:$${BACKEND_PORT:-8000}"
-	@echo "  Ollama:   host :$${OLLAMA_PORT:-11434} (OLLAMA_BASE_URL=host.docker.internal)"
+	@echo "  Frontend:     http://localhost:$${FRONTEND_PORT:-3000}"
+	@echo "  Backend API:  http://localhost:$${BACKEND_PORT:-8000}"
+	@echo "  Agent worker: http://localhost:8001/health"
+	@echo "  Kafka:        localhost:$${KAFKA_PORT:-9092}"
+	@echo "  Ollama:       host :$${OLLAMA_PORT:-11434} (proxy :11435 → backend/worker)"
 
 ## Ollama в Docker (отдельный volume, модели через ollama pull внутри контейнера)
 up-ollama-docker:
@@ -60,6 +80,12 @@ logs:
 
 logs-backend:
 	docker compose logs -f backend
+
+logs-worker:
+	docker compose logs -f agent-worker
+
+logs-kafka:
+	docker compose logs -f kafka
 
 logs-frontend:
 	docker compose logs -f frontend

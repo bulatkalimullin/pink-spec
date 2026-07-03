@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
+from app.agent.agents.pipeline_planner import resolve_domain
+from app.agent.spec_maturity import build_maturity_prompt_block, resolve_spec_maturity
 from app.agent.state import MultiAgentState
 from app.services.artifact_store import summarize_artifacts
 from app.services.log_bus import log_bus
@@ -43,9 +45,12 @@ class GenericSpecAgent(BaseAgent):
         prior = await summarize_artifacts(session_id, max_per_key=1200)
 
         output_lang = state["rules"].get("output", {}).get("language", "en")
+        domain = resolve_domain(state)
+        maturity = resolve_spec_maturity(state["rules"], state["spec_level"])
+        maturity_block = build_maturity_prompt_block(maturity, domain)
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + maturity_block},
             {
                 "role": "user",
                 "content": (

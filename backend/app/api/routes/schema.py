@@ -6,15 +6,14 @@ from fastapi import APIRouter
 
 from app.schemas.rules import Rules
 from app.services.language_validator import SUPPORTED_LANGUAGES
+from app.services.ollama_presets import (
+    EMBEDDING_FALLBACK_OPTIONS,
+    OLLAMA_EMBEDDING_HINTS,
+    OLLAMA_LLM_HINTS,
+    enrich_presets,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["schema"])
-
-OLLAMA_MODEL_HINTS = [
-    "qwen2.5:7b",
-    "llama3.2",
-    "gemma3:4b",
-    "mistral",
-]
 
 YANDEX_MODELS = [
     {"id": "yandexgpt-lite", "label": "YandexGPT Lite", "description": "Быстрая модель для черновиков"},
@@ -53,6 +52,10 @@ async def get_llm_providers():
     except Exception:
         pass
 
+    llm_hints = list(dict.fromkeys([*ollama_models, *OLLAMA_LLM_HINTS]))
+    embedding_hints = list(dict.fromkeys([*OLLAMA_EMBEDDING_HINTS, *ollama_models]))
+    presets = enrich_presets(ollama_models)
+
     return {
         "default": settings.llm_provider,
         "providers": [
@@ -61,8 +64,20 @@ async def get_llm_providers():
                 "label": "Ollama (local)",
                 "description": "Локальные модели через Ollama",
                 "available": ollama_reachable,
-                "models": ollama_models or OLLAMA_MODEL_HINTS,
+                "models": llm_hints,
+                "installed_models": ollama_models,
+                "llm_model_hints": OLLAMA_LLM_HINTS,
+                "embedding_model_hints": embedding_hints,
+                "presets": presets,
+                "embedding_fallback_options": EMBEDDING_FALLBACK_OPTIONS,
                 "default_model": settings.ollama_llm_model,
+                "default_config": {
+                    "llm_model": settings.ollama_llm_model,
+                    "fallback_models": settings.ollama_fallback_models(),
+                    "embedding_model": settings.ollama_embedding_model,
+                    "embedding_fallback_models": settings.ollama_embedding_fallback_model_list(),
+                    "embedding_fallback": settings.ollama_embedding_fallback,
+                },
                 "config_key": "ollama",
             },
             {

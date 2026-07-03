@@ -64,6 +64,8 @@ class MultiAgentState(TypedDict):
     pipeline_planned: bool
     current_step: dict[str, Any] | None
     pipeline_reasoning: str
+    pipeline_replan_cycles: int
+    pipeline_version: int
 
     # Refinement patching
     refinement_issues: dict[str, list[dict[str, Any]]]
@@ -88,14 +90,32 @@ def initial_state(
     if spec_level == "L4":
         mode = "auto"
         pipeline_cfg["mode"] = "auto"
+        from app.agent.spec_maturity import maturity_pipeline_defaults, resolve_spec_maturity
+
+        maturity = resolve_spec_maturity(rules, spec_level)
+        defaults = maturity_pipeline_defaults(maturity, spec_level)
         if pipeline_cfg.get("min_steps") is None:
-            pipeline_cfg["min_steps"] = 12
+            pipeline_cfg["min_steps"] = defaults["min_steps"]
         if pipeline_cfg.get("min_deliverables") is None:
-            pipeline_cfg["min_deliverables"] = 8
+            pipeline_cfg["min_deliverables"] = defaults["min_deliverables"]
+        if pipeline_cfg.get("max_replan_cycles", 2) < defaults["max_replan_cycles"]:
+            pipeline_cfg["max_replan_cycles"] = defaults["max_replan_cycles"]
         rules["pipeline"] = pipeline_cfg
+        from app.agent.agents.pipeline_planner import apply_domain_l4_rules
         from app.agent.l4_guards import apply_l4_runtime_guards
 
+        rules = apply_domain_l4_rules(rules)
         rules, _ = apply_l4_runtime_guards(rules)
+    elif spec_level == "L3":
+        from app.agent.spec_maturity import maturity_pipeline_defaults, resolve_spec_maturity
+
+        maturity = resolve_spec_maturity(rules, spec_level)
+        defaults = maturity_pipeline_defaults(maturity, spec_level)
+        if pipeline_cfg.get("min_steps") is None:
+            pipeline_cfg["min_steps"] = defaults["min_steps"]
+        if pipeline_cfg.get("min_deliverables") is None:
+            pipeline_cfg["min_deliverables"] = defaults["min_deliverables"]
+        rules["pipeline"] = pipeline_cfg
 
     if mode == "fixed":
         from app.agent.pipeline_utils import legacy_sequence_to_steps
@@ -146,6 +166,8 @@ def initial_state(
         pipeline_planned=pipeline_planned,
         current_step=None,
         pipeline_reasoning="",
+        pipeline_replan_cycles=0,
+        pipeline_version=1,
         refinement_issues={},
         patch_unchanged_counts={},
         refinement_pending=False,

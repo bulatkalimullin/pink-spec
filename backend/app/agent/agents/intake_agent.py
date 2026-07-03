@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
+from app.agent.spec_maturity import build_intake_maturity_hint, resolve_spec_maturity
 from app.agent.state import MultiAgentState
 from app.services.intake_options import normalize_intake_options
 from app.services.language_validator import (
@@ -65,6 +66,9 @@ class IntakeAgent(BaseAgent):
         nfr = rules.get("nfr", {})
         agent_rules = rules.get("agent_rules", [])
         lang_block = output_language_instruction(rules)
+        spec_level = state.get("spec_level", "L2")
+        maturity = resolve_spec_maturity(rules, spec_level)
+        maturity_hint = build_intake_maturity_hint(spec_level, maturity)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -72,7 +76,9 @@ class IntakeAgent(BaseAgent):
                 "role": "user",
                 "content": (
                     f"{lang_block}\n\n"
-                    f"Spec level: {state.get('spec_level', 'L2')}\n"
+                    f"Spec level: {spec_level}\n"
+                    f"Spec maturity: {maturity}\n"
+                    f"{maturity_hint}\n"
                     f"Project: {json.dumps(project, ensure_ascii=False)}\n"
                     f"Idea:\n{state['idea']}\n\n"
                     f"Constraints: {json.dumps(constraints, ensure_ascii=False)}\n"

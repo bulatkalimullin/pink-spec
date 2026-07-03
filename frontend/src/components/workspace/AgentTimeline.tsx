@@ -1,6 +1,12 @@
 import { cn } from "@/lib/utils";
 import { useSessionStore, AgentState } from "@/stores/sessionStore";
-import { CheckCircle, Circle, Loader2, XCircle, AlertTriangle } from "lucide-react";
+import { CheckCircle, Circle, Loader2, XCircle, AlertTriangle, MinusCircle } from "lucide-react";
+
+const DEFAULT_STATUS_CONFIG = {
+  icon: <Circle className="h-3.5 w-3.5" />,
+  color: "text-zinc-600",
+  label: "Pending",
+};
 
 const STATUS_CONFIG: Record<AgentState["status"], { icon: React.ReactNode; color: string; label: string }> = {
   pending: { icon: <Circle className="h-3.5 w-3.5" />, color: "text-zinc-600", label: "Pending" },
@@ -12,6 +18,8 @@ const STATUS_CONFIG: Record<AgentState["status"], { icon: React.ReactNode; color
   success: { icon: <CheckCircle className="h-3.5 w-3.5" />, color: "text-pink-400", label: "Done" },
   failed: { icon: <XCircle className="h-3.5 w-3.5" />, color: "text-red-400", label: "Failed" },
   degraded: { icon: <AlertTriangle className="h-3.5 w-3.5" />, color: "text-orange-400", label: "Degraded" },
+  skipped: { icon: <MinusCircle className="h-3.5 w-3.5" />, color: "text-zinc-500", label: "Skipped" },
+  cancelled: { icon: <XCircle className="h-3.5 w-3.5" />, color: "text-amber-400", label: "Cancelled" },
 };
 
 export default function AgentTimeline() {
@@ -35,7 +43,7 @@ export default function AgentTimeline() {
         const agent = agents[agentId];
         const isCurrent = currentAgent === agentId;
         const status = agent?.status ?? "pending";
-        const config = STATUS_CONFIG[status];
+        const config = STATUS_CONFIG[status] ?? DEFAULT_STATUS_CONFIG;
         const label = agent?.name || step.name || agentId;
         const isTaskBatch =
           step.executor === "builtin:task_decomposer" || step.id.startsWith("tasks_");

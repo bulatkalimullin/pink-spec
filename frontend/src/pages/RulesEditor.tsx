@@ -11,7 +11,7 @@ const DEFAULT_RULES = {
   schema_version: "1.0",
   spec_level: "L2",
   llm_provider: "ollama",
-  project: { name: "my-project", domain: "general", idea_summary: null },
+  project: { name: "my-project", domain: "general", idea_summary: null, spec_maturity: "production" },
   constraints: {
     stack: { backend: [], frontend: [], forbidden: [] },
     deployment: "local",
@@ -28,9 +28,10 @@ const DEFAULT_RULES = {
   },
   agent_rules: [],
   ollama: {
-    llm_model: "gemma3:4b",
-    fallback_models: ["gemma3:1b", "qwen-uncensored-q4:latest"],
-    embedding_model: "nomic-embed-text",
+    llm_model: "jayeshpandit2480/gemma3-UNCENSORED:4b",
+    fallback_models: ["gemma3:4b", "gemma3:1b"],
+    embedding_model: "locusai/all-minilm-l6-v2:latest",
+    embedding_fallback_models: ["embeddinggemma:latest"],
     embedding_fallback: "keyword",
     temperature: 0.2,
     max_tokens: 4096,
@@ -82,8 +83,18 @@ const DEFAULT_RULES = {
     include_tasks: null,
     min_steps: null,
     min_deliverables: null,
+    max_replan_cycles: 2,
   },
 };
+
+const DOMAIN_OPTIONS = [
+  { value: "general", label: "General" },
+  { value: "software", label: "Software / Web" },
+  { value: "education", label: "Education / UMK" },
+  { value: "embedded", label: "Embedded / IoT" },
+  { value: "hardware", label: "Hardware" },
+  { value: "content", label: "Content / Editorial" },
+] as const;
 
 export default function RulesEditor() {
   const navigate = useNavigate();
@@ -121,6 +132,44 @@ export default function RulesEditor() {
     }
   };
 
+  const currentDomain = (() => {
+    try {
+      return JSON.parse(value)?.project?.domain ?? "general";
+    } catch {
+      return "general";
+    }
+  })();
+
+  const currentMaturity = (() => {
+    try {
+      return JSON.parse(value)?.project?.spec_maturity ?? "production";
+    } catch {
+      return "production";
+    }
+  })();
+
+  const setMaturity = (spec_maturity: string) => {
+    try {
+      const parsed = JSON.parse(value);
+      parsed.project = { ...parsed.project, spec_maturity };
+      setValue(JSON.stringify(parsed, null, 2));
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const setDomain = (domain: string) => {
+    try {
+      const parsed = JSON.parse(value);
+      parsed.project = { ...parsed.project, domain };
+      setValue(JSON.stringify(parsed, null, 2));
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   return (
     <div className="flex h-[100dvh] flex-col bg-background">
       {/* Header */}
@@ -134,6 +183,32 @@ export default function RulesEditor() {
         </button>
         <span className="text-border">|</span>
         <span className="text-sm font-semibold">{t.rules.title}</span>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="hidden sm:inline">Domain</span>
+          <select
+            value={currentDomain}
+            onChange={(e) => setDomain(e.target.value)}
+            className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+          >
+            {DOMAIN_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="hidden sm:inline">Maturity</span>
+          <select
+            value={currentMaturity}
+            onChange={(e) => setMaturity(e.target.value)}
+            className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+          >
+            <option value="mvp">MVP</option>
+            <option value="production">Production</option>
+            <option value="enterprise">Enterprise</option>
+          </select>
+        </label>
         <LanguageSelector compact />
         <div className="flex-1" />
         {error ? (

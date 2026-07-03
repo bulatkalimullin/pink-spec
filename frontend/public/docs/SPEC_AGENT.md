@@ -1,6 +1,6 @@
 # Pink Spec Agent — полная спецификация
 
-> Версия: 1.2 | Дата: 2026-07-01 | Статус: Source of Truth
+> Версия: **1.3** | Дата: **2026-07-03** | Статус: Source of Truth
 
 ## Оглавление
 
@@ -12,17 +12,18 @@
 6. [Папка tasks/ — микро-задачи](#6-папка-tasks)
 7. [Стек и деплой](#7-стек-и-деплой)
 8. [JSON-конфиг правил](#8-json-конфиг-правил)
-9. [LangGraph — оркестрация](#9-langgraph-оркестрация)
-10. [Ollama интеграция](#10-ollama-интеграция)
+9. [Оркестрация (Kafka + agent-worker)](#9-оркестрация-kafka--agent-worker)
+10. [LLM-провайдеры (Ollama / YandexGPT)](#10-llm-провайдеры-ollama--yandexgpt)
 11. [API и WebSocket](#11-api-и-websocket)
 12. [UI спецификация (Mission Control)](#12-ui-спецификация)
 13. [Выходные артефакты](#13-выходные-артефакты)
 14. [Структура репозитория](#14-структура-репозитория)
 15. [Fallback-стратегии](#15-fallback-стратегии)
 16. [Failure modes и Recovery](#16-failure-modes-и-recovery)
-17. [Безопасность и ограничения](#17-безопасность-и-ограничения)
-18. [Проекты, output и админка](#18-проекты-output-и-админка)
-19. [Статистика](#19-статистика)
+17. [Алгоритмы отказоустойчивости мультиагента](#17-алгоритмы-отказоустойчивости-мультиагента)
+18. [Безопасность и ограничения](#18-безопасность-и-ограничения)
+19. [Проекты, output и админка](#19-проекты-output-и-админка)
+20. [Статистика](#20-статистика)
 
 ---
 
@@ -96,13 +97,27 @@
 | L3 | 1800 | Сократить review |
 | L4 | null | Safety cap 7200 (2 ч) |
 
-**Anti-loop guard:** один агент >5 раз подряд без прогресса → fallback / escalate / force finalize с `gaps.md`.
+**Anti-loop guard:** L1–L3 — один агент >5 вызовов без прогресса; L4 — >15 → fallback / escalate / force finalize с `gaps.md`.
+
+### Зрелость спецификации (`spec_maturity`)
+
+Отдельно от `spec_level` (L1–L4) задаёт **глубину и набор артефактов** внутри уровня.
+
+| Значение | Default для | Эффект |
+|----------|-------------|--------|
+| `mvp` | L1, L2 | Краткий scope, `[DEFERRED]` для non-essential |
+| `production` | L3, L4 | Полный ops/NFR/test strategy, production deliverables |
+| `enterprise` | override | production + compliance, расширенный pipeline |
+
+Поле: `rules.project.spec_maturity`. UI: `SpecMaturitySelector` на Home. Резолв: `app/agent/spec_maturity.py` → промпты агентов и `maturity_pipeline_defaults()`.
 
 ---
 
 ## 3. Мультиагентная система
 
-Реализация: LangGraph Supervisor pattern. Каждый агент — subgraph с собственным system prompt и output schema.
+**Реализация:** custom Supervisor loop (`supervisor.py` + `graph.py`), **не LangGraph runtime** (зависимости LangChain/LangGraph в `pyproject.toml` зарезервированы, но граф — явный `while` с `supervisor_node`).
+
+Каждый агент — async-класс с system prompt, output schema и вызовом через `session_runner` + `log_bus.emit`.
 
 ### Роли агентов
 
@@ -119,6 +134,8 @@
 | **Context Manager** | Summarization, state compression, handoff | `session_summary`, `agent_handoff` |
 | **Intake** | Pre-flight: проверка достаточности idea до pipeline | batch `question_asked` или `intake_complete` |
 | **Pipeline Planner** | Динамический pipeline (L4 / auto mode) | `pipeline[]`, reasoning |
+| **Refinement Fixer** | Точечный patch артефактов по feedback Reviewer | `artifact_patched` |
+| **Export** | Финализация manifest, gaps.md, metrics | `done`, `session_completed_partial` |
 
 ### Supervisor — поведение
 
@@ -292,35 +309,32 @@ One sentence — что должно работать после выполне�
 
 | Слой | Технология |
 |------|------------|
-| API / WS | FastAPI, `websockets`, SSE fallback |
-| Orchestration | LangChain + LangGraph |
-| LLM | Ollama (`/api/chat`, OpenAI-compatible `/v1`) |
-| Embeddings | Ollama (`/api/embeddings`, модели `nomic-embed-text` и др.) |
+| API / WS gateway | FastAPI, `websockets`, SSE fallback |
+| AI runtime | `agent-worker` (отдельный контейнер) |
+| Messaging | Apache Kafka (`pink-spec.session.commands`, `pink-spec.session.events`) |
+| Orchestration | Custom supervisor loop (`app/agent/graph.py`) |
+| LLM | Ollama (`/api/chat`) или YandexGPT |
+| Embeddings | Ollama / Yandex |
 | Vector store | ChromaDB (local `./data/vectors`) |
 | UI | React + TypeScript + Vite + shadcn/ui + Tailwind CSS |
-| Persistence | SQLite |
-| Monitoring | `psutil` + optional `pynvml` |
-| DevOps | Docker Compose + Ollama (host или контейнер) |
+| Persistence | SQLite (WAL, shared volume API + worker) |
+| Monitoring | `psutil` + optional `pynvml` (worker) |
+| DevOps | Docker Compose: `kafka`, `backend`, `agent-worker`, `frontend`, Ollama |
 
-**Deployment:** `docker compose up`. Ollama — на хосте или сервис `ollama` в compose. Secrets и URL через `.env`.
+**Deployment:** `docker compose up`. API публикует команды в Kafka; `agent-worker` потребляет их и шлёт события обратно для WebSocket UI.
 
-### Ollama в Docker Compose (опционально)
+### Сервисы Compose
 
 ```yaml
 services:
-  ollama:
-    image: ollama/ollama
-    ports: ["11434:11434"]
-    volumes: [ollama_data:/root/.ollama]
-    # deploy.resources.reservations.devices — GPU при необходимости
-
-  backend:
-    environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-    depends_on: [ollama]
+  kafka:        # KRaft single-node, :9092
+  backend:      # REST + WS gateway, :8000
+  agent-worker: # LLM + graph + RAG, :8001/health, GPU
+  frontend:     # :3000
+  ollama-proxy: # host Ollama → Docker
 ```
 
-Модели подтягиваются один раз: `docker exec -it <ollama> ollama pull llama3.2`.
+Модели Ollama: `docker exec -it <ollama> ollama pull <model>`.
 
 ---
 
@@ -332,6 +346,7 @@ services:
 {
   "schema_version": "1.0",
   "spec_level": "L2",
+  "llm_provider": "ollama",
   "l4": {
     "safety_cap_sec": 7200,
     "completion_confidence": 0.85,
@@ -340,7 +355,8 @@ services:
   "project": {
     "name": "my-service",
     "domain": "fintech",
-    "idea_summary": null
+    "idea_summary": null,
+    "spec_maturity": "production"
   },
   "constraints": {
     "stack": {
@@ -429,12 +445,16 @@ services:
     "circuit_breaker_failures": 3,
     "circuit_breaker_cooldown_sec": 60,
     "checkpoint_every_agent": true,
-    "auto_resume_on_reconnect": true
+    "auto_resume_on_reconnect": true,
+    "patch_unchanged_limit": 2,
+    "review_plateau_window": 3
   }
 }
 ```
 
 **Приоритет правил:** `critical` > `high` > `medium` > `low`. Конфликты → `RuleConflictResolver` → `question_asked` → user pick → lock в manifest.
+
+**`patch_unchanged_limit` / `review_plateau_window`:** защита от бесконечного L4 review без прогресса (см. §17). Worker heartbeat stale: **90s** (hardcoded в `is_worker_active`, планируется вынести в rules).
 
 **`project.name`:** задаёт `output_slug` и отображаемое имя. На Home — отдельное поле; если пусто — автослаг из idea.
 
@@ -442,19 +462,72 @@ services:
 
 ---
 
-## 9. LangGraph — оркестрация
+## 9. Оркестрация (Kafka + agent-worker)
+
+### Топология (split runtime)
+
+```
+Browser :3000
+  → nginx (frontend) ──proxy──► backend :8000 (API + WS gateway)
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+              SQLite WAL      Kafka commands   Kafka events consumer
+              (shared vol)    (producer)       → log_bus → WebSocket
+                    ▲               │
+                    │               ▼
+              agent-worker :8001 ──consume──► session_runner
+                    │                         supervisor loop
+                    └──► Ollama / YandexGPT (via ollama-proxy :11435)
+```
+
+| Процесс | Роль | Не делает |
+|---------|------|-----------|
+| `backend` | REST, WS, publish commands, consume events, persist logs | In-process `run_graph` |
+| `agent-worker` | Consume commands, LLM, graph, RAG, publish events | Прямой WS к клиенту |
+| `kafka` | Bus команд и событий | — |
+
+**Топики:** `pink-spec.session.commands`, `pink-spec.session.events` (config: `KAFKA_*_TOPIC`).
+
+**Ключ партиции:** `session_id` — порядок событий внутри сессии сохраняется.
 
 ### Pre-flight Intake (до pipeline)
 
 ```
-POST /start → run_graph
-  → IntakeAgent.analyze(idea, rules)
+POST /start → API status=queued → Kafka session.start
+  → agent-worker: session_runner.start → IntakeAgent.analyze(idea, rules)
   → ready? → supervisor loop
-  → questions? → status=waiting_user, emit intake_started + question_asked[]
-  → wait POST /answers/batch → merge clarifications в idea → running
+  → questions? → status=waiting_user, events → Kafka → WS
+  → POST /answers/batch → Kafka intake.answers_ready → worker resumes
 ```
 
-Clarifications дописываются в `idea` блоком `[User clarifications]` для downstream-агентов.
+### Команды (API → worker)
+
+| type | Триггер |
+|------|---------|
+| `session.start` | `POST /sessions/{id}/start` |
+| `session.restart` | `POST /sessions/{id}/restart` |
+| `session.cancel` | `POST /control cancel`, WS cancel |
+| `session.control` | pause/resume/replan/recover |
+| `intake.answers_ready` | `POST /answers/batch` |
+| `rag.ingest` | `POST /rag/ingest` |
+
+Каждая команда — `SessionCommand` с уникальным `command_id` (UUID). Worker дедуплицирует по `command_id` через таблицу `processed_commands` (TTL 24h) — повторная доставка Kafka не запускает граф дважды (R19).
+
+### События (worker → API → WebSocket)
+
+Формат совместим с `log_bus`: `{type, ts, seq, session_id, payload}`.
+
+- Worker: `log_bus.emit` → `KafkaEventPublisher` (кроме high-frequency `system_metrics`)
+- API: `KafkaEventConsumer` → `log_bus.ingest_external` → WS + `session_logs`
+
+Доп. событие: `worker.session_claimed` — worker взял сессию в работу.
+
+### Worker heartbeat и orphan reconciliation
+
+- Worker каждые ~15s пишет `sessions.worker_heartbeat_at` для активных сессий
+- При старте API: `reconcile_orphaned_sessions()` — статусы `running|queued|stuck|…` без свежего heartbeat → `interrupted`
+- UI: кнопка **«Перезапустить пайплайн»** (`POST /restart`) для `interrupted|stuck|completed_partial|failed|degraded`
 
 ### Global State
 
@@ -478,10 +551,12 @@ class MultiAgentState(TypedDict):
     review_reports: list[dict]
     review_cycles: int
     agent_call_counts: dict[str, int]  # anti-loop guard
+    patch_unchanged_counts: dict[str, int]
     status: str
     errors: list[str]
     checkpoints: list[str]
     recovery_trace: list[dict]
+    _review_plateau: bool | None
 ```
 
 ### Graph flow
@@ -502,9 +577,13 @@ validate_input
 
 ---
 
-## 10. Ollama интеграция
+## 10. LLM-провайдеры (Ollama / YandexGPT)
 
-Все LLM и embeddings идут **только через Ollama** — локальный inference-сервер. Hugging Face Inference API, `transformers` и `sentence-transformers` не используются.
+Провайдер выбирается в `rules.llm_provider`: `ollama` | `yandexgpt`. UI: `ProviderSelector` + `OllamaConfigPanel` (пресеты, missing models).
+
+### Ollama (локально)
+
+Все LLM и embeddings по умолчанию через Ollama. Hugging Face Inference API и `sentence-transformers` **не используются** в runtime (папка `models/` — опциональный импорт GGUF).
 
 ### Требования
 
@@ -555,6 +634,14 @@ ingest(sources) → chunk(RecursiveCharacterTextSplitter)
 
 При недоступности Ollama embeddings → `embedding_fallback: "keyword"` (BM25) → full-text scan.
 
+### YandexGPT (cloud)
+
+`rules.yandexgpt.model` + env `YANDEX_FOLDER_ID`, `YANDEX_API_KEY` или `YANDEX_PASSPORT_TOKEN`. Embeddings: `text-search-doc` / `text-search-query`.
+
+### Цепочка fallback LLM
+
+`FallbackLLMChain` (`app/llm/fallback_chain.py`): primary → `fallback_models[]` с exponential backoff `min(2**i, 30)s` между попытками; каждый переход → `fallback_triggered` в Activity.
+
 ---
 
 ## 11. API и WebSocket
@@ -564,8 +651,10 @@ ingest(sources) → chunk(RecursiveCharacterTextSplitter)
 | Method | Path | Описание |
 |--------|------|----------|
 | POST | `/api/v1/sessions` | Создать сессию |
-| POST | `/api/v1/sessions/{id}/start` | Старт графа `{idea, rules}` |
-| GET | `/api/v1/sessions/{id}` | Статус, артефакты, questions |
+| POST | `/api/v1/sessions/{id}/start` | Старт графа → Kafka `session.start` |
+| POST | `/api/v1/sessions/{id}/restart` | Перезапуск для `interrupted|stuck|…` → Kafka `session.restart` |
+| GET | `/api/v1/sessions/{id}` | Статус, артефакты, questions, `worker_heartbeat_at` |
+| GET | `/api/v1/llm-providers` | Ollama/Yandex: models, presets, `installed_models` |
 | GET | `/api/v1/spec-levels` | Metadata L1–L4 |
 | GET | `/api/v1/sessions/{id}/supervisor` | Status report, agent, ETA |
 | GET | `/api/v1/sessions/{id}/tasks` | Tasks tree |
@@ -645,6 +734,7 @@ ingest(sources) → chunk(RecursiveCharacterTextSplitter)
 | `system_warning` | warn | `{metric, value, threshold, hint}` |
 | `error` | error | `{code, message, recoverable}` |
 | `done` | info | `{duration_sec, artifacts_count}` |
+| `worker.session_claimed` | info | `{worker}` |
 | `session_snapshot` | — | `{status, agents, log_tail, metrics_snapshot}` |
 
 #### Client → server events
@@ -942,53 +1032,34 @@ pink-spec/
 │   │   │   │   ├── system.py
 │   │   │   │   └── schema.py
 │   │   │   └── websocket.py
+│   │   ├── kafka/               # commands, events, schemas, producer
+│   │   ├── worker.py            # agent-worker entrypoint
 │   │   ├── agent/
 │   │   │   ├── supervisor.py
 │   │   │   ├── graph.py
+│   │   │   ├── spec_maturity.py
 │   │   │   ├── state.py
 │   │   │   ├── agents/
-│   │   │   │   ├── product_analyst.py
-│   │   │   │   ├── architect.py
-│   │   │   │   ├── api_designer.py
-│   │   │   │   ├── ui_designer.py
-│   │   │   │   ├── task_decomposer.py
-│   │   │   │   ├── researcher.py
-│   │   │   │   ├── reviewer.py
-│   │   │   │   ├── context_manager.py
-│   │   │   │   ├── intake_agent.py
-│   │   │   │   └── pipeline_planner.py
-│   │   │   └── prompts/
+│   │   │   │   ├── refinement_fixer.py
+│   │   │   │   ├── ...
 │   │   ├── llm/
 │   │   │   ├── ollama_provider.py
+│   │   │   ├── yandex_provider.py
 │   │   │   └── fallback_chain.py
-│   │   ├── rag/
-│   │   │   ├── ingest.py
-│   │   │   ├── retriever.py
-│   │   │   └── saturation.py
-│   │   ├── schemas/
-│   │   │   ├── rules.py
-│   │   │   ├── events.py
-│   │   │   └── state.py
 │   │   ├── services/
-│   │   │   ├── log_bus.py
-│   │   │   ├── session_watchdog.py
-│   │   │   ├── system_monitor.py
-│   │   │   ├── session.py
-│   │   │   ├── projects.py
-│   │   │   ├── output_paths.py
-│   │   │   ├── output_migration.py
-│   │   │   ├── intake.py
-│   │   │   ├── artifact_patcher.py
-│   │   │   ├── artifact_store.py
-│   │   │   ├── stats_collector.py
-│   │   │   ├── stats_aggregator.py
-│   │   │   └── export.py
+│   │   │   ├── session_runner.py
+│   │   │   ├── session_launcher.py
+│   │   │   ├── orphan_sessions.py
+│   │   │   ├── kafka_commands.py
+│   │   │   ├── command_idempotency.py
+│   │   │   ├── artifact_quality.py
+│   │   │   ├── ollama_presets.py
+│   │   │   └── ...
 │   │   └── db/
-│   │       ├── models.py
-│   │       └── connection.py
 │   ├── tests/
 │   ├── pyproject.toml
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── Dockerfile.worker
 ├── frontend/
 │   ├── components.json
 │   ├── tailwind.config.ts
@@ -1075,9 +1146,11 @@ WebSocket → SSE (`/api/v1/sessions/{id}/stream`) → polling REST каждые
 ### Session state machine
 
 ```
-pending → running ↔ paused
+pending → queued → running ↔ paused
 running → waiting_user (intake) → running
-running → waiting_user ↔ stuck
+running → stuck          # watchdog: уведомление, граф НЕ убивается автоматически
+running → interrupted    # worker/API restart, stale heartbeat
+interrupted → queued     # POST /restart
 running → degraded → completed_partial
 running → completed
 stuck → failed (unrecoverable)
@@ -1103,11 +1176,14 @@ stuck → completed_partial (force export)
 
 | Сценарий | Detection | Recovery |
 |----------|-----------|----------|
-| Review loop | `review_cycles > max_review_cycles` (10) | Force pass + `review_waiver` in manifest |
-| Routing cycle A→B→A | Route history hash repeats 3x | Break → export partial or escalate |
-| Anti-loop (same agent) | 5+ calls без score delta | Simplify / escalate / gaps |
+| Review loop | `review_cycles > max_review_cycles` | Force pass + `review_waiver` in manifest |
+| Review plateau | `review_confidence_plateau()` / `review_issues_plateau()` | `_review_plateau` → export + gaps |
+| Routing cycle A→B→A | Route history hash repeats 3x (planned P06) | Break → export partial or escalate |
+| Anti-loop (same agent) | 5+ (L1–L3) / 15+ (L4) calls без score delta | Ladder degradation / gaps |
+| Patch loop | `patch_unchanged_counts >= patch_unchanged_limit` | Skip artifact; move to next |
 | Dead-end routing | `next_agent: null` 2x | Default → Reviewer → partial |
 | Conflicting rules | RuleConflictResolver | `question_asked` → user pick |
+| Open circuit | `CircuitBreaker.is_open()` | Substitute agent / skip + ASSUMPTION |
 
 #### C. RAG / Embeddings
 
@@ -1134,23 +1210,42 @@ stuck → completed_partial (force export)
 |----------|-----------|----------|
 | OOM / RAM > 95% | SystemMonitor `system_warning` | Pause → summarize → resume or smaller Ollama model |
 | Disk full | IOError on export | Stop → export what fits → error |
-| Backend crash | Process die | On restart: offer resume from checkpoint |
+| Backend crash | Process die | Orphan → `interrupted`; restart worker; `POST /restart` |
+| Worker crash | Heartbeat stale | API reconcile → `interrupted` |
+| Kafka unavailable | Producer/consumer fail | Retry on start (30×2s); API 503 on command publish |
 | SQLite locked | DB timeout | Retry 3x → in-memory queue → flush later |
+| nginx stale upstream | 502 on `/api` | Dynamic DNS `127.0.0.11` in frontend nginx.conf |
 
 ### Watchdog & Circuit Breaker
 
-**Watchdog triggers (→ `stuck`):**
-- `last_state_change_at > stuck_detection_sec` (300s)
-- `agent running > agent_timeout_sec` (600s)
-- `review_cycles > max_review_cycles`
+**Watchdog** (`session_watchdog.py`, poll 10s):
 
-**Circuit breaker:** 3 consecutive failures → open 60s → WS `circuit_breaker_open`. Supervisor routes around.
+| Триггер | Условие | Действие |
+|---------|---------|----------|
+| `no_progress` | `last_progress_at > stuck_detection_sec` | `session_stuck` + status `stuck` (**без auto-cancel**) |
+| `agent_timeout` | agent running > `agent_timeout_sec` | `agent_timeout` → `session_stuck` |
+| Intake exempt | `current_agent == intake` | Stuck не детектируется (медленный Ollama — норма) |
+| Supervisor/export exempt | routing nodes | Agent timeout не применяется |
+
+**Circuit breaker** (per `agent_id`):
+
+- `circuit_breaker_failures` подряд → open на `circuit_breaker_cooldown_sec`
+- WS: `circuit_breaker_open` / `circuit_breaker_closed`
+- Supervisor обходит агента с open circuit → substitute / skip + ASSUMPTION
+
+**Разделение отмены** (`session_runner.py`):
+
+| Метод | Эффект |
+|-------|--------|
+| `cancel_agent()` | Прервать текущий LLM-вызов; граф продолжается |
+| `request_cancel()` | Graceful shutdown → export / partial |
+| `clear_cancel()` | Сброс stale cancel после intake / HITL |
 
 ### Checkpoint & Resume
 
 - После каждого агента (L3/L4): persist `MultiAgentState` → SQLite `session_checkpoints`
-- Artifacts flushed to `output/{output_slug}/` (резолв через `session_id` → slug cache)
-- On reconnect: `session_snapshot` + `resume_from_checkpoint`
+- Artifacts flushed to `output/{output_slug}/`
+- On reconnect: `session_snapshot` + tail 200 log entries; `POST /resume` from checkpoint
 
 ### Recovery actions (via REST)
 
@@ -1159,22 +1254,145 @@ POST /sessions/{id}/recover
 {
   "action": "retry_agent" | "skip_agent" | "force_export" | "restart_from"
         | "replan_pipeline" | "retry_tasks" | "retry_reviewer",
-  "target_agent": "architect"  // optional
+  "target_agent": "architect"
 }
+
+POST /sessions/{id}/restart
+# interrupted | stuck | completed_partial | failed | degraded | waiting_user
 
 POST /sessions/{id}/control
 {
-  "action": "pause" | "resume" | "cancel" | "force_export"
-        | "replan_pipeline" | "retry_tasks" | "retry_reviewer",
+  "action": "pause" | "resume" | "cancel" | "force_export" | ...,
   "max_review_cycles": 15,
-  "completion_confidence": 0.9,
-  "until_confident": true
+  "completion_confidence": 0.9
 }
 ```
 
 ---
 
-## 17. Безопасность и ограничения
+## 17. Алгоритмы отказоустойчивости мультиагента
+
+Цель: **деградация с сохранением артефактов**, а не «молчаливый fail». Принцип UI: **Nothing Silent** — каждый fallback и recovery шаг виден в Activity.
+
+### 17.1 Матрица: реализовано (v1.3)
+
+| ID | Алгоритм | Модуль | Суть |
+|----|----------|--------|------|
+| R01 | **LLM fallback chain** | `fallback_chain.py` | Primary → fallback models, backoff, `fallback_triggered` |
+| R02 | **Circuit breaker per agent** | `session_watchdog.py` | N failures → cooldown; supervisor bypass |
+| R03 | **Watchdog no-progress** | `session_watchdog.py` | Stuck = hint, не kill (с v1.2.1) |
+| R04 | **Intake slow-path exempt** | `session_watchdog.py` | LLM intake до 5–10 мин без false stuck |
+| R05 | **Agent vs graph cancel** | `session_runner.py` | Retry agent ≠ cancel pipeline |
+| R06 | **Anti-loop guard** | `supervisor.py` | 5 (L1–L3) / 15 (L4) calls без delta → export/escalate |
+| R07 | **Review confidence plateau** | `supervisor.py` | 3 цикла с одинаковым confidence → waiver |
+| R08 | **Review issues plateau** | `supervisor.py` | Повтор одних issues → `_review_plateau` → gaps |
+| R09 | **Patch unchanged limit** | `supervisor.py` | N× `unchanged` patch → skip artifact |
+| R10 | **Artifact quality gates** | `artifact_quality.py` | Key validation, duplicate detection |
+| R11 | **Orphan reconciliation** | `orphan_sessions.py` | Stale heartbeat → `interrupted` |
+| R12 | **Worker heartbeat** | `worker.py`, `session.py` | Claim + liveness для split runtime |
+| R13 | **Kafka idempotent producer** | `kafka/producer.py` | `enable_idempotence=True`, `acks=all` |
+| R14 | **Event bridge** | `log_bus.py`, `event_bridge.py` | Worker→Kafka→API→WS decoupling |
+| R15 | **Checkpoint per agent** | `graph.py` | SQLite WAL, resume after disconnect |
+| R16 | **Emergency summarization** | `context_manager.py` | При 70% token budget |
+| R17 | **Template degraded mode** | `agents/base.py` | После исчерпания LLM chain |
+| R18 | **Session restart** | `sessions.py` | `interrupted` → re-queue command |
+| R19 | **Command idempotency** | `command_idempotency.py` | `processed_commands` в SQLite, TTL 24h; duplicate `command_id` → skip |
+
+### 17.2 Ladder graceful degradation (supervisor)
+
+Уровни применяются сверху вниз при нехватке времени, ошибках LLM или open circuit:
+
+```
+L0  Full pipeline (все агенты, полные промпты)
+L1  Skip optional agents (Researcher на L1, UI на L2)
+L2  Simplified prompt (короче schema, меньше sections)
+L3  Substitute agent (Architect → minimal API sketch в одном doc)
+L4  Template fill (`docs/templates/`) без LLM
+L5  Partial export + gaps.md + ASSUMPTION markers
+L6  Failed (0 artifacts) + gaps с manual_actions
+```
+
+Supervisor выбирает уровень по: `spec_level`, `time_budget`, `circuit_breaker`, `agent_call_counts`.
+
+### 17.3 Планируемые алгоритмы (roadmap)
+
+| ID | Алгоритм | Проблема | Дизайн |
+|----|----------|----------|--------|
+| P02 | **Dead Letter Queue** | Команда падает после max retries | Topic `pink-spec.session.commands.dlq` + alert в UI |
+| P03 | **Session lease / split-brain** | Два worker на одну сессию | `UPDATE sessions SET worker_id=?, leased_until=?` CAS при claim |
+| P04 | **Adaptive agent timeout** | Фикс. 600s не подходит всем агентам | P95 duration из `session_metrics` × 1.5 per agent_id |
+| P05 | **Bulkhead concurrency** | OOM при parallel L3 designers | Semaphore: max 2 concurrent LLM; queue остальных |
+| P06 | **Route cycle detection** | A→B→A routing loop | Rolling hash последних 5 `(agent, artifacts_hash)`; break → export |
+| P07 | **Hedged LLM request** | Ollama tail latency | Если primary > 30s без token — parallel запрос на fallback model, first-wins |
+| P08 | **Poison output quarantine** | Агент 3× отдаёт invalid JSON | Quarantine output; supervisor skip + critical ASSUMPTION |
+| P09 | **Kafka event replay** | UI reconnect gap | API consumer: `seek` по offset для `session_id` key |
+| P10 | **Saga compensation** | Cancel mid-pipeline | `recovery_trace` + optional `rollback_patches` для последнего artifact |
+| P11 | **Token budget circuit** | Context overflow | Hard stop генерации at 85% window → force summarization |
+| P12 | **Health-based model routing** | Медленная модель на intake | Если `ollama /api/ps` busy → switch to lighter model для intake only |
+| P13 | **Supervisor second opinion** | Dead-end `next_agent: null` | Lightweight LLM call «куда дальше?» с 3 кандидатами |
+| P14 | **Chaos hooks** | Тестирование resilience | `rules.resilience.chaos`: inject timeout/error per agent (dev only) |
+| P15 | **Cross-session backpressure** | 10 parallel sessions | Global worker queue depth; reject new `start` with 429 |
+
+### 17.4 Диаграмма принятия решений (supervisor + watchdog)
+
+```mermaid
+flowchart TD
+  start[Agent completes / fails] --> cb{Circuit open?}
+  cb -->|yes| bypass[Substitute / skip + ASSUMPTION]
+  cb -->|no| fail{Failure?}
+  fail -->|yes| cbinc[record_failure]
+  cbinc --> cbopen{Threshold?}
+  cbopen -->|yes| emitCB[circuit_breaker_open]
+  cbopen -->|no| retry{Retries left?}
+  retry -->|yes| backoff[Retry + simplified prompt]
+  retry -->|no| ladder[Graceful degradation ladder]
+  fail -->|no| cbok[record_success]
+  cbok --> route[Supervisor route]
+  route --> antiloop{Anti-loop / plateau?}
+  antiloop -->|yes| export[Force export + gaps]
+  antiloop -->|no| next[Next agent]
+
+  wd[Watchdog poll 10s] --> prog{no_progress?}
+  prog -->|yes| stuck[session_stuck event]
+  stuck --> user[User: retry / skip / export]
+  prog -->|no| ato{agent_timeout?}
+  ato -->|yes| stuck
+```
+
+### 17.5 Конфигурация resilience (полный справочник)
+
+| Ключ | Default | Алгоритм |
+|------|---------|----------|
+| `agent_timeout_sec` | 600 | R03 agent_timeout |
+| `stuck_detection_sec` | 300 | R03 no_progress |
+| `max_review_cycles` | 10 | R07/R08 + export |
+| `circuit_breaker_failures` | 3 | R02 |
+| `circuit_breaker_cooldown_sec` | 60 | R02 |
+| `patch_unchanged_limit` | 2 | R09 |
+| `review_plateau_window` | 3 | R07/R08 |
+| `worker_heartbeat_stale_sec` | 90 (код) | R11 — `is_worker_active(max_age_sec)` |
+| `checkpoint_every_agent` | true | R15 |
+| `hitl_timeout_sec` | 3600 | HITL proceed partial |
+
+### 17.6 Наблюдаемость resilience
+
+Каждый алгоритм **обязан** эмитить событие:
+
+| Событие | Когда |
+|---------|-------|
+| `fallback_triggered` | LLM / embedding / agent fallback |
+| `session_stuck` | Watchdog |
+| `agent_timeout` | Agent exceeded timeout |
+| `circuit_breaker_open/closed` | CB state change |
+| `recovery_started` | User/API recovery action |
+| `assumption_logged` | Skip / substitute / waiver |
+| `checkpoint_saved` | State persisted |
+
+Метрики в `session_metrics`: `fallback_count`, `stuck_events`, `retry_count`, `circuit_opens` — для P04 adaptive timeout.
+
+---
+
+## 18. Безопасность и ограничения
 
 - Ollama `base_url` — только server-side; при внешнем Ollama — без публичного exposure
 - Проверка доступности моделей при старте сессии (`GET /api/tags`)
@@ -1187,7 +1405,7 @@ POST /sessions/{id}/control
 
 ---
 
-## 18. Проекты, output и админка
+## 19. Проекты, output и админка
 
 ### Модель данных (SQLite `sessions`)
 
@@ -1237,7 +1455,7 @@ UI: `/projects` — таблица с Open / Artifacts / ZIP / Delete (confirm).
 
 ---
 
-## 19. Статистика
+## 20. Статистика
 
 Метрики собираются в `session_metrics` при завершении graph (`collect_and_persist_metrics`). Агрегаты — `global_stats` (singleton).
 

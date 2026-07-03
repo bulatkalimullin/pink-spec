@@ -22,6 +22,14 @@ const FIELDS: Field[] = [
   { section: "Ollama", key: "ollama_embedding_model", label: "Embedding Model", type: "text", placeholder: "nomic-embed-text", envVar: "OLLAMA_EMBEDDING_MODEL" },
   {
     section: "Ollama",
+    key: "ollama_embedding_fallback_models",
+    label: "Embedding Fallback Models",
+    type: "text",
+    placeholder: "embeddinggemma:latest,nomic-embed-text",
+    envVar: "OLLAMA_EMBEDDING_FALLBACK_MODELS",
+  },
+  {
+    section: "Ollama",
     key: "ollama_embedding_fallback",
     label: "Embedding Fallback",
     type: "select",

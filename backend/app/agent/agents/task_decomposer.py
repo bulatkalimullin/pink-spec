@@ -1,4 +1,4 @@
-"""Task Decomposer agent — breaks roadmap into micro-tasks (15-60 min each)."""
+"""Task Decomposer agent — breaks work into atomic work-package tasks (15-60 min each)."""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import re
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
-from app.agent.pipeline_utils import TASK_COUNT_BY_LEVEL, merge_tasks
+from app.agent.agents.pipeline_planner import resolve_domain
+from app.agent.domain_profiles import get_domain_l4_tasks_config, normalize_domain
+from app.agent.spec_maturity import build_maturity_prompt_block, resolve_spec_maturity
 from app.agent.state import MultiAgentState
 from app.services.artifact_store import (
     load_tasks_full_async,
-    read_artifact_slice,
     save_artifact,
     save_tasks,
     summarize_artifacts,
@@ -20,31 +21,31 @@ from app.services.export import write_task_roadmap
 from app.services.artifact_quality import stack_constraint_prompt
 from app.services.log_bus import log_bus
 
-SYSTEM_PROMPT = """You are a senior engineering lead. Decompose the project specifications into atomic implementation tasks.
+SYSTEM_PROMPT = """You are a senior project lead. Decompose specifications into atomic work-package tasks.
 
 Each task must take 15–60 minutes to complete. Output a JSON array of task objects.
 
 Each task object must have:
 - id: "NNN" (zero-padded, sequential within this batch)
-- phase: "XX-phase-name"
+- phase: "XX-phase-slug" (use the work package phase from the request, e.g. 01-design, 02-content)
 - title: "short imperative verb phrase"
 - priority: "high" | "medium" | "low"
 - estimated_minutes: 15-60
 - depends_on: ["NNN", ...]
-- spec_refs: ["docs/product_spec.md#section", "docs/architecture_spec.md#section", ...]
-- goal: "one sentence — what works when done"
+- spec_refs: ["docs/product_spec.md#section", ...]
+- goal: "one sentence — what is done when complete"
 - context: "2-3 sentences explaining relationship to overall project"
 - steps: ["step 1", "step 2", ...]
 - acceptance_criteria: ["criterion 1", ...]
 - notes: ["pitfall or note", ...]
 - verification: "how to verify completion"
 
-Group tasks into logical phases: 01-foundation, 02-backend, 03-frontend, etc.
+Group tasks into the work package phase specified in FOCUS. Do NOT use 01-foundation/02-backend/03-frontend unless the focus explicitly says software implementation phases.
 Return ONLY valid JSON array. No prose.
 """
 
-ROADMAP_PROMPT = """Summarize the implementation roadmap in Markdown based on the task list.
-Include phases, key milestones, and links to spec documents under docs/.
+ROADMAP_PROMPT = """Summarize the work roadmap in Markdown based on the task list.
+Include work package phases, key milestones, and links to spec documents under docs/.
 Keep under 600 words.
 """
 
@@ -58,16 +59,19 @@ class TaskDecomposerAgent(BaseAgent):
         rules = state["rules"]
         step = state.get("current_step") or {}
         l4_cfg = rules.get("l4", {}) or {}
+        domain = resolve_domain(state)
 
         default_target = TASK_COUNT_BY_LEVEL.get(spec_level, 20)
         if spec_level == "L4":
-            default_target = l4_cfg.get("tasks_per_batch", 25)
+            domain_cfg = get_domain_l4_tasks_config(domain)
+            default_target = l4_cfg.get("tasks_per_batch") or domain_cfg["tasks_per_batch"]
         target_count = step.get("target_count") or default_target
         run_id = step.get("id", self.agent_id)
         prompt_focus = step.get("prompt_focus", "")
+        work_phase = step.get("work_package_phase") or _extract_phase_slug(prompt_focus)
 
         if target_count == 0:
-            await self._log(session_id, "info", "Task decomposition skipped for this level")
+            await self._log(session_id, "info", "Work package decomposition skipped for this level")
             return {
                 **state,
                 "agent_outputs": {**state.get("agent_outputs", {}), run_id: "skipped"},
@@ -75,19 +79,7 @@ class TaskDecomposerAgent(BaseAgent):
                 "current_step": None,
             }
 
-        product_spec = await read_artifact_slice(session_id, "product_spec", 1500)
-        architecture_spec = await read_artifact_slice(session_id, "architecture_spec", 1500)
-        api_spec = await read_artifact_slice(session_id, "api_spec", 800)
-        ui_spec = await read_artifact_slice(session_id, "ui_spec", 800)
-        extra_specs = await summarize_artifacts(
-            session_id,
-            keys=[
-                k
-                for k in state.get("artifacts", {})
-                if k not in ("product_spec", "architecture_spec", "api_spec", "ui_spec")
-            ],
-            max_per_key=800,
-        )
+        all_specs = await summarize_artifacts(session_id, max_per_key=1500)
         output_lang = rules.get("output", {}).get("language", "en")
         existing_tasks = await load_tasks_full_async(session_id)
         existing_summary = ""
@@ -98,20 +90,22 @@ class TaskDecomposerAgent(BaseAgent):
             )
 
         focus_line = f"\n\nFOCUS (only these tasks): {prompt_focus}" if prompt_focus else ""
-        stack_line = stack_constraint_prompt(rules)
+        phase_line = f"\nRequired phase slug for all tasks: {work_phase}" if work_phase else ""
+        stack_line = ""
+        if normalize_domain(rules.get("project", {}).get("domain", "general")) == "software":
+            stack_line = stack_constraint_prompt(rules)
         stack_block = f"\n\nSTACK CONSTRAINTS:\n{stack_line}" if stack_line else ""
+        maturity = resolve_spec_maturity(rules, spec_level)
+        maturity_block = build_maturity_prompt_block(maturity, domain)
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + maturity_block},
             {
                 "role": "user",
                 "content": (
-                    f"Generate approximately {target_count} tasks for:{focus_line}{stack_block}\n\n"
-                    f"Product:\n{product_spec}\n\n"
-                    f"Architecture:\n{architecture_spec}\n\n"
-                    f"API:\n{api_spec}\n\n"
-                    f"UI:\n{ui_spec}\n\n"
-                    f"Additional specs:\n{extra_specs[:2000]}\n"
+                    f"Domain: {domain}\n"
+                    f"Generate approximately {target_count} tasks for:{focus_line}{phase_line}{stack_block}\n\n"
+                    f"Specifications:\n{all_specs[:8000]}\n"
                     f"{existing_summary}\n\n"
                     f"Use spec_refs paths like docs/product_spec.md#section-name\n"
                     f"Output language for human-readable fields: {output_lang}"
@@ -122,7 +116,7 @@ class TaskDecomposerAgent(BaseAgent):
         await self._log(
             session_id,
             "info",
-            f"Decomposing into ~{target_count} micro-tasks ({run_id})...",
+            f"Decomposing work package into ~{target_count} tasks ({run_id})...",
         )
         raw = await self._generate(state, messages)
         new_batch = _parse_tasks(raw)
@@ -160,6 +154,9 @@ class TaskDecomposerAgent(BaseAgent):
             new_batch = []
         else:
             new_batch = _normalize_spec_refs(new_batch)
+            if work_phase:
+                for t in new_batch:
+                    t["phase"] = work_phase
 
         tasks = merge_tasks(existing_tasks, new_batch)
         slim_tasks_list = await save_tasks(session_id, tasks)
@@ -189,6 +186,8 @@ class TaskDecomposerAgent(BaseAgent):
 
         roadmap_md = ""
         if state.get("artifacts", {}).get("TASK_ROADMAP"):
+            from app.services.artifact_store import read_artifact_slice
+
             roadmap_md = await read_artifact_slice(session_id, "TASK_ROADMAP", 100_000)
         if tasks and is_last_batch:
             try:
@@ -222,6 +221,18 @@ class TaskDecomposerAgent(BaseAgent):
         }
 
 
+def _extract_phase_slug(prompt_focus: str) -> str | None:
+    if not prompt_focus:
+        return None
+    match = re.search(r"phase\s+'([^']+)'", prompt_focus, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"(\d{2}-[a-z0-9_-]+)", prompt_focus, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
 def _normalize_spec_refs(tasks: list[dict]) -> list[dict]:
     for t in tasks:
         refs = t.get("spec_refs", [])
@@ -241,7 +252,7 @@ def _normalize_spec_refs(tasks: list[dict]) -> list[dict]:
 
 
 def _fallback_roadmap(tasks: list[dict]) -> str:
-    lines = ["# Implementation Roadmap\n"]
+    lines = ["# Work Roadmap\n"]
     phases: dict[str, list[dict]] = {}
     for t in tasks:
         phases.setdefault(t.get("phase", "00-unknown"), []).append(t)

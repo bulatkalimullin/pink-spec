@@ -51,6 +51,9 @@ def merge_rules_llm_config(base_cfg: dict[str, Any], rules: dict[str, Any]) -> d
             cfg["ollama_llm_fallbacks"] = [m for m in fallbacks if m]
         if ollama.get("embedding_model"):
             cfg["ollama_embedding_model"] = ollama["embedding_model"]
+        embed_fallbacks = ollama.get("embedding_fallback_models")
+        if embed_fallbacks is not None:
+            cfg["ollama_embedding_fallback_models"] = [m for m in embed_fallbacks if m]
         if ollama.get("embedding_fallback"):
             cfg["ollama_embedding_fallback"] = ollama["embedding_fallback"]
         if ollama.get("temperature") is not None:

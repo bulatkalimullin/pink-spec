@@ -13,9 +13,11 @@ from app.agent.pipeline_utils import (
     append_extra_task_batch,
     count_task_decomposer_steps,
     get_routing_sequence,
+    insert_pipeline_steps_before_reviewer,
     required_artifact_keys,
     step_builtin_agent_id,
 )
+from app.agent.agents.pipeline_planner import plan_pipeline_delta, resolve_domain
 from app.agent.state import MultiAgentState
 from app.services.artifact_store import artifact_exists
 from app.services.log_bus import log_bus
@@ -197,7 +199,10 @@ async def supervisor_node(state: MultiAgentState) -> dict[str, Any]:
     }
 
 
-async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
+async def handle_l4_post_review(
+    state: MultiAgentState,
+    llm_provider: Any | None = None,
+) -> dict[str, Any]:
     """Evaluate L4 completion after reviewer; trigger refinement or export."""
     session_id = state["session_id"]
     spec_level = state["spec_level"]
@@ -280,6 +285,10 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
             )
             return {"current_agent": "export", "status": "degraded"}
 
+        replan_update = await _try_pipeline_replan(state, last_report, llm_provider, criteria)
+        if replan_update:
+            return replan_update
+
         updated = apply_refinement(state, last_report, criteria)
     elif not criteria.get("tasks_coverage"):
         updated = reset_task_decomposer_steps(state)
@@ -314,6 +323,94 @@ async def handle_l4_post_review(state: MultiAgentState) -> dict[str, Any]:
         },
     )
     return {**updated, "current_agent": "supervisor"}
+
+
+async def _try_pipeline_replan(
+    state: MultiAgentState,
+    last_report: dict[str, Any],
+    llm_provider: Any | None,
+    criteria: dict[str, bool],
+) -> dict[str, Any] | None:
+    """Extend pipeline with new steps when reviewer finds gaps and replan budget remains."""
+    if llm_provider is None:
+        return None
+
+    pipeline_cfg = state.get("rules", {}).get("pipeline", {}) or {}
+    max_replan = int(pipeline_cfg.get("max_replan_cycles", 2))
+    replan_cycles = int(state.get("pipeline_replan_cycles", 0))
+    if replan_cycles >= max_replan:
+        return None
+
+    passed = last_report.get("passed", False)
+    confidence = last_report.get("confidence", 0)
+    min_confidence = state["rules"].get("l4", {}).get("completion_confidence", 0.85)
+    has_critical = any(
+        i.get("severity") in ("critical", "high") for i in last_report.get("issues", [])
+    )
+    from app.agent.spec_maturity import is_production_maturity, resolve_spec_maturity
+
+    maturity = resolve_spec_maturity(state.get("rules", {}), state.get("spec_level", "L2"))
+    prod_issue = is_production_maturity(maturity) and any(
+        i.get("severity") == "critical"
+        or "mvp" in i.get("description", "").lower()
+        or "prototype" in i.get("description", "").lower()
+        for i in last_report.get("issues", [])
+    )
+    needs_replan = (not passed or confidence < min_confidence or not criteria.get("artifacts_complete")) and (
+        has_critical or not criteria.get("artifacts_complete") or prod_issue
+    )
+    if not needs_replan:
+        return None
+
+    new_steps, reasoning = await plan_pipeline_delta(state, llm_provider, last_report)
+    if not new_steps:
+        return None
+
+    session_id = state["session_id"]
+    pipeline = insert_pipeline_steps_before_reviewer(state.get("pipeline") or [], new_steps)
+    outputs = dict(state.get("agent_outputs", {}))
+    reviewer_steps = [s["id"] for s in pipeline if step_builtin_agent_id(s) == "reviewer"]
+    for rid in reviewer_steps:
+        outputs.pop(rid, None)
+
+    await log_bus.emit(
+        session_id,
+        "pipeline_extended",
+        {
+            "added_steps": [s.get("id") for s in new_steps],
+            "reasoning": reasoning,
+            "replan_cycle": replan_cycles + 1,
+        },
+    )
+    await log_bus.emit(
+        session_id,
+        "log_entry",
+        {
+            "level": "info",
+            "agent_id": "supervisor",
+            "message": (
+                f"Pipeline extended with {len(new_steps)} step(s) after reviewer gaps "
+                f"(replan {replan_cycles + 1}/{max_replan})"
+            ),
+        },
+    )
+
+    from app.services.session import save_pipeline
+
+    await save_pipeline(session_id, pipeline, f"{state.get('pipeline_reasoning', '')}\n\nDelta: {reasoning}")
+
+    return {
+        **state,
+        "pipeline": pipeline,
+        "agent_outputs": outputs,
+        "pipeline_replan_cycles": replan_cycles + 1,
+        "pipeline_version": int(state.get("pipeline_version", 1)) + 1,
+        "pipeline_reasoning": f"{state.get('pipeline_reasoning', '')}\n\nDelta: {reasoning}",
+        "refinement_pending": False,
+        "refinement_issues": {},
+        "current_agent": "supervisor",
+        "review_cycles": state.get("review_cycles", 0),
+    }
 
 
 def ensure_task_coverage(state: MultiAgentState) -> MultiAgentState:
@@ -359,11 +456,13 @@ def ensure_task_coverage(state: MultiAgentState) -> MultiAgentState:
 
     batch_num = batch_count + 1
     tasks_per_batch = l4.get("tasks_per_batch", 25)
+    domain = resolve_domain(state)
     pipeline = append_extra_task_batch(
         pipeline,
         batch_num,
         tasks_per_batch,
-        f"Generate additional tasks to reach at least {required} total. Avoid duplicates.",
+        f"Generate additional work-package tasks to reach at least {required} total. Avoid duplicates.",
+        domain=domain,
     )
     return {**state, "pipeline": pipeline}
 
@@ -460,11 +559,7 @@ def check_l4_criteria(state: MultiAgentState) -> dict[str, bool]:
     rules = state.get("rules", {})
     l4 = rules.get("l4", {}) or {}
 
-    required = (
-        required_artifact_keys(pipeline)
-        if pipeline
-        else {"product_spec", "architecture_spec", "api_spec", "ui_spec"}
-    )
+    required = required_artifact_keys(pipeline) if pipeline else set()
 
     min_tasks = l4.get("min_tasks", 100)
     pct = l4.get("tasks_coverage_pct", 95.0)

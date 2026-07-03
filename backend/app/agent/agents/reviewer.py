@@ -7,6 +7,8 @@ import re
 from typing import Any
 
 from app.agent.agents.base import BaseAgent
+from app.agent.agents.pipeline_planner import resolve_domain
+from app.agent.domain_profiles import get_domain_deliverables, get_domain_review_checklist
 from app.agent.state import MultiAgentState
 from app.services.artifact_quality import load_existing_artifact_texts
 from app.services.artifact_store import summarize_artifacts
@@ -15,7 +17,7 @@ from app.services.language_validator import (
     should_validate_language,
     validate_artifacts_language,
 )
-from app.services.log_bus import log_bus
+from app.agent.spec_maturity import build_maturity_prompt_block, resolve_spec_maturity
 
 SYSTEM_PROMPT = """You are a senior engineering reviewer. Perform a quality review of all generated specifications.
 
@@ -56,17 +58,33 @@ class ReviewerAgent(BaseAgent):
         high_rules = [r for r in agent_rules if r.get("priority") in ("critical", "high")]
         assumptions = state.get("assumptions", [])
         lang_block = output_language_instruction(rules)
+        domain = resolve_domain(state)
+        maturity = resolve_spec_maturity(rules, state.get("spec_level", "L2"))
+        domain_checklist = get_domain_review_checklist(domain, maturity)
+        expected_deliverables = [d["artifact_key"] for d in get_domain_deliverables(domain, maturity)]
+        pipeline_keys = {
+            s.get("artifact_key")
+            for s in (state.get("pipeline") or [])
+            if s.get("artifact_key")
+        }
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + build_maturity_prompt_block(maturity, domain)},
             {
                 "role": "user",
                 "content": (
                     f"{lang_block}\n"
+                    f"Project domain: {domain}\n"
+                    f"Spec maturity: {maturity}\n"
+                    f"Domain review checklist:\n"
+                    + "\n".join(f"- {c}" for c in domain_checklist)
+                    + f"\n\nExpected deliverables for domain: {expected_deliverables}\n"
+                    f"Pipeline artifact keys: {sorted(pipeline_keys)}\n"
                     f"NFR requirements: {json.dumps(nfr)}\n"
                     f"Critical/High rules: {json.dumps(high_rules)}\n"
                     f"Assumptions made: {json.dumps(assumptions[:20])}\n\n"
-                    f"Artifacts to review:\n{artifacts_summary[:6000]}"
+                    f"Artifacts to review:\n{artifacts_summary[:6000]}\n\n"
+                    "Flag missing deliverables with location like lesson_plan#general and severity critical."
                 ),
             },
         ]

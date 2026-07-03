@@ -42,7 +42,7 @@ export interface SessionProgress {
 export interface AgentState {
   id: string;
   name: string;
-  status: "pending" | "running" | "success" | "failed" | "degraded";
+  status: "pending" | "running" | "success" | "failed" | "degraded" | "skipped" | "cancelled";
   startedAt?: string;
   completedAt?: string;
   durationMs?: number;
@@ -127,6 +127,7 @@ interface SessionStore {
   setPipeline: (steps: PipelineStep[], reasoning?: string) => void;
   setWsStatus: (s: SessionStore["wsStatus"]) => void;
   pushLog: (entry: LogEntry) => void;
+  replaceLogs: (entries: LogEntry[]) => void;
   pushMetrics: (m: SystemMetrics) => void;
   markRead: () => void;
   handleEnvelope: (envelope: LogEntry) => void;
@@ -134,6 +135,24 @@ interface SessionStore {
 }
 
 const NON_FEED_TYPES = new Set(["session_snapshot", "ping", "pong"]);
+
+const AGENT_STATUS_VALUES = new Set<AgentState["status"]>([
+  "pending",
+  "running",
+  "success",
+  "failed",
+  "degraded",
+  "skipped",
+  "cancelled",
+]);
+
+function normalizeAgentStatus(raw: string): AgentState["status"] {
+  if (AGENT_STATUS_VALUES.has(raw as AgentState["status"])) {
+    return raw as AgentState["status"];
+  }
+  if (raw === "timeout") return "failed";
+  return "degraded";
+}
 
 const AGENT_NAMES: Record<string, string> = {
   researcher: "Researcher",
@@ -200,6 +219,23 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       };
     }),
 
+  replaceLogs: (entries) =>
+    set((state) => {
+      const bySeq = new Map<number, LogEntry>();
+      for (const e of state.logs) bySeq.set(e.seq, e);
+      for (const e of entries) {
+        bySeq.set(e.seq, {
+          seq: e.seq,
+          type: e.type,
+          ts: e.ts,
+          session_id: e.session_id ?? state.sessionId ?? "",
+          payload: e.payload ?? {},
+        });
+      }
+      const logs = [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-MAX_LOGS);
+      return { logs };
+    }),
+
   pushMetrics: (m) =>
     set((state) => ({
       metricsHistory: [...state.metricsHistory, m].slice(-MAX_METRICS),
@@ -254,7 +290,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
                 name: s.agents[p.agent_id]?.name || AGENT_NAMES[p.agent_id] || p.agent_id,
                 passNumber: 1,
               }),
-              status: p.status as AgentState["status"],
+              status: normalizeAgentStatus(p.status),
               completedAt: ts,
               durationMs: p.duration_ms,
             },

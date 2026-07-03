@@ -105,6 +105,38 @@ async def update_session_status(session_id: str, status: str) -> None:
         await db.commit()
 
 
+async def touch_worker_heartbeat(session_id: str) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE sessions SET worker_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+            (_now(), _now(), session_id),
+        )
+        await db.commit()
+
+
+async def is_worker_active(session_id: str, max_age_sec: int = 90) -> bool:
+    """True if session is queued or worker heartbeat is fresh."""
+    session = await get_session(session_id)
+    if not session:
+        return False
+    status = session.get("status", "")
+    if status == "queued":
+        return True
+    if status not in ("running", "waiting_user", "paused", "stuck"):
+        return False
+    hb = session.get("worker_heartbeat_at")
+    if not hb:
+        return False
+    try:
+        from datetime import datetime
+
+        ts = datetime.fromisoformat(hb.replace("Z", "+00:00"))
+        age = (datetime.now(UTC) - ts).total_seconds()
+        return age <= max_age_sec
+    except Exception:
+        return False
+
+
 async def save_manifest(session_id: str, manifest: dict) -> None:
     async with get_db() as db:
         await db.execute(

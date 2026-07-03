@@ -135,30 +135,53 @@ def _build_yandex_embedding_provider(cfg: dict) -> EmbeddingProvider:
     return build_yandex_embedding_provider(cfg)
 
 
+def _ollama_embedding_model_chain(cfg: dict) -> list[str]:
+    """Primary + fallback embedding models, deduplicated."""
+    seen: set[str] = set()
+    chain: list[str] = []
+    for raw in [
+        cfg.get("ollama_embedding_model"),
+        *cfg.get("ollama_embedding_fallback_models", []),
+    ]:
+        if not raw:
+            continue
+        name = str(raw).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        chain.append(name)
+    return chain
+
+
 def _build_ollama_embedding_provider(cfg: dict) -> EmbeddingProvider:
     base_url: str = cfg.get("ollama_base_url", "http://localhost:11434")
-    model: str | None = cfg.get("ollama_embedding_model")
-    fallback: str = cfg.get("ollama_embedding_fallback", "keyword")
+    final_fallback: str = cfg.get("ollama_embedding_fallback", "keyword")
     timeout_sec: float = float(cfg.get("ollama_timeout_sec", 120))
+    models = _ollama_embedding_model_chain(cfg)
 
-    if model:
+    last_err: Exception | None = None
+    for model in models:
         try:
             provider = OllamaEmbeddingProvider(base_url, model, timeout_sec=timeout_sec)
             provider.verify()
             logger.info("embedding_provider_ready", mode="ollama", model=model, base_url=base_url)
             return provider
         except Exception as e:
+            last_err = e
             logger.warning("ollama_embedding_failed", model=model, error=str(e))
 
-    if fallback == "keyword":
+    if final_fallback == "keyword":
         logger.warning("embedding_fallback_keyword")
         return KeywordFallbackProvider()
 
-    if fallback == "none":
+    if final_fallback == "none":
+        tried = ", ".join(models) if models else "(none configured)"
         raise RuntimeError(
-            f"Ollama embedding model {model!r} unavailable and OLLAMA_EMBEDDING_FALLBACK=none"
-        )
+            f"All Ollama embedding models unavailable ({tried}) "
+            "and OLLAMA_EMBEDDING_FALLBACK=none"
+        ) from last_err
 
     raise RuntimeError(
-        "No embedding provider available. Set OLLAMA_EMBEDDING_MODEL or OLLAMA_EMBEDDING_FALLBACK=keyword"
+        "No embedding provider available. Set OLLAMA_EMBEDDING_MODEL "
+        "or OLLAMA_EMBEDDING_FALLBACK=keyword"
     )

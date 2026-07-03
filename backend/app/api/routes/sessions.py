@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 
 from app.schemas.rules import (
@@ -16,6 +14,13 @@ from app.schemas.rules import (
     StartSessionRequest,
 )
 from app.services.export import build_zip, read_artifact, read_task_file, session_output_dir
+from app.services.kafka_commands import (
+    publish_cancel,
+    publish_control,
+    publish_intake_answers_ready,
+    publish_restart,
+    publish_start,
+)
 from app.services.log_bus import log_bus
 from app.services.session import (
     answer_question,
@@ -23,19 +28,13 @@ from app.services.session import (
     get_latest_checkpoint,
     get_open_questions,
     get_session,
+    is_worker_active,
+    update_session_status,
 )
-from app.services.session_control import enqueue, get_overrides, set_overrides
-from app.services.session_watchdog import watchdog
+from app.services.session_control import get_overrides, set_overrides
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
-
-
-def _get_providers():
-    """Lazy import to avoid circular at startup."""
-    from app.main import embedding_provider, llm_provider  # type: ignore
-
-    return llm_provider, embedding_provider
 
 
 @router.post("", status_code=201)
@@ -49,26 +48,25 @@ async def create_session_endpoint(body: StartSessionRequest):
     return {"session_id": session_id, "spec_level": body.rules.spec_level}
 
 
-@router.post("/{session_id}/start")
-async def start_session(
-    session_id: str, body: StartSessionRequest, background_tasks: BackgroundTasks
-):
+@router.post("/{session_id}/start", status_code=202)
+async def start_session(session_id: str, body: StartSessionRequest):
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
     if session["status"] not in ("pending", "failed"):
         raise HTTPException(409, f"Session already in state: {session['status']}")
-
-    from app.services.session_launcher import launch_session_graph
+    if await is_worker_active(session_id):
+        raise HTTPException(409, "Session is already queued or running on worker")
 
     rules_dict = body.rules.model_dump()
-    await launch_session_graph(
+    await update_session_status(session_id, "queued")
+    await publish_start(
         session_id,
         idea=body.idea,
-        rules_dict=rules_dict,
-        monitoring_cfg=body.rules.monitoring.model_dump(),
+        rules=rules_dict,
+        monitoring=body.rules.monitoring.model_dump(),
     )
-    return {"session_id": session_id, "status": "starting"}
+    return {"session_id": session_id, "status": "queued"}
 
 
 RESTARTABLE_STATUSES = frozenset(
@@ -76,29 +74,25 @@ RESTARTABLE_STATUSES = frozenset(
 )
 
 
-@router.post("/{session_id}/restart")
+@router.post("/{session_id}/restart", status_code=202)
 async def restart_session(session_id: str):
-    """Re-launch the agent graph after interrupt, stuck, or empty partial completion."""
-    from app.services.session import update_session_status
-    from app.services.session_launcher import launch_session_graph
-    from app.services.session_runner import session_runner
-
+    """Re-queue session on agent-worker after interrupt or partial completion."""
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    if session_runner.is_running(session_id):
-        raise HTTPException(409, "Session graph is already running")
+    if await is_worker_active(session_id):
+        raise HTTPException(409, "Session is already queued or running on worker")
     if session["status"] not in RESTARTABLE_STATUSES:
         raise HTTPException(409, f"Cannot restart from status: {session['status']}")
 
     rules = session.get("rules") or {}
-    monitoring_cfg = (rules.get("monitoring") or {})
-    await update_session_status(session_id, "running")
-    await launch_session_graph(
+    monitoring_cfg = rules.get("monitoring") or {}
+    await update_session_status(session_id, "queued")
+    await publish_restart(
         session_id,
         idea=session["idea"],
-        rules_dict=rules,
-        monitoring_cfg=monitoring_cfg,
+        rules=rules,
+        monitoring=monitoring_cfg,
     )
     await log_bus.emit(
         session_id,
@@ -106,10 +100,10 @@ async def restart_session(session_id: str):
         {
             "level": "info",
             "agent_id": "system",
-            "message": "Пайплайн перезапущен",
+            "message": "Пайплайн поставлен в очередь на перезапуск",
         },
     )
-    return {"session_id": session_id, "status": "starting"}
+    return {"session_id": session_id, "status": "queued"}
 
 
 @router.get("/{session_id}")
@@ -129,23 +123,18 @@ async def get_session_endpoint(session_id: str):
 
 @router.get("/{session_id}/health")
 async def session_health(session_id: str):
-    from app.services.session_runner import session_runner
-
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    wd_state = watchdog.get_state(session_id)
-    stuck = False
-    if wd_state:
-        stuck = wd_state.status == "stuck" or wd_state.is_stuck()
-    graph_active = session_runner.is_running(session_id)
+    graph_active = await is_worker_active(session_id)
     return {
         "status": session["status"],
-        "stuck": stuck,
-        "stuck_since_sec": wd_state.stuck_since_sec() if wd_state else None,
+        "stuck": session["status"] == "stuck",
+        "stuck_since_sec": None,
         "recoverable": session["status"] not in ("failed",),
-        "current_agent": wd_state.current_agent if wd_state else None,
+        "current_agent": None,
         "graph_active": graph_active,
+        "worker_heartbeat_at": session.get("worker_heartbeat_at"),
     }
 
 
@@ -155,15 +144,11 @@ async def submit_answer(session_id: str, body: AnswerRequest):
     if not session:
         raise HTTPException(404, "Session not found")
     await answer_question(session_id, body.question_id, body.answer)
-    watchdog.deliver_answer(body.question_id, body.answer)
     return {"status": "answered"}
 
 
 @router.post("/{session_id}/answers/batch")
 async def submit_answers_batch(session_id: str, body: BatchAnswersRequest):
-    from app.services.intake import notify_intake_resolved
-    from app.services.session import update_session_status
-
     session = await get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -184,15 +169,11 @@ async def submit_answers_batch(session_id: str, body: BatchAnswersRequest):
         if qid not in open_ids:
             continue
         await answer_question(session_id, qid, answer)
-        watchdog.deliver_answer(qid, answer)
 
-    notify_intake_resolved(session_id)
+    await publish_intake_answers_ready(session_id, len(body.answers))
     remaining = await get_open_questions(session_id)
     if not remaining:
         await update_session_status(session_id, "running")
-        wd = watchdog.get_state(session_id)
-        if wd:
-            wd.status = "running"
         await log_bus.emit(
             session_id,
             "intake_complete",
@@ -233,12 +214,10 @@ async def recover_session(session_id: str, body: RecoverRequest):
     ):
         set_overrides(session_id, directive)
 
-    enqueue(session_id, directive)
+    await publish_control(session_id, directive)
 
     if body.action == "force_export":
-        from app.services.session_runner import session_runner
-
-        session_runner.request_cancel(session_id)
+        await publish_cancel(session_id)
 
     await log_bus.emit(
         session_id,
@@ -283,32 +262,16 @@ async def session_control(session_id: str, body: SessionControlRequest):
 
     if settings:
         set_overrides(session_id, {**settings, "action": "update_settings"})
-        enqueue(session_id, {"action": "update_settings", **settings})
+        await publish_control(session_id, {"action": "update_settings", **settings})
 
     if action:
-        enqueue(session_id, {"action": action})
+        await publish_control(session_id, {"action": action})
         if action == "pause":
-            wd = watchdog.get_state(session_id)
-            if wd:
-                wd.status = "paused"
-            from app.services.session import update_session_status
-
             await update_session_status(session_id, "paused")
         elif action == "resume":
-            wd = watchdog.get_state(session_id)
-            if wd:
-                wd.status = "running"
-            from app.services.session import update_session_status
-
             await update_session_status(session_id, "running")
-        elif action == "cancel":
-            from app.services.session_runner import session_runner
-
-            session_runner.request_cancel(session_id)
-        elif action == "force_export":
-            from app.services.session_runner import session_runner
-
-            session_runner.request_cancel(session_id)
+        elif action in ("cancel", "force_export"):
+            await publish_cancel(session_id)
 
     overrides = get_overrides(session_id)
     await log_bus.emit(

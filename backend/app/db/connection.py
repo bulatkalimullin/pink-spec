@@ -19,6 +19,8 @@ async def get_db() -> AsyncIterator[aiosqlite.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
         yield db
 
 
@@ -101,6 +103,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         ("output_slug", "TEXT"),
         ("project_name", "TEXT"),
         ("deleted_at", "TEXT"),
+        ("worker_heartbeat_at", "TEXT"),
     ):
         try:
             await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {typ}")
@@ -133,11 +136,25 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         """)
         await db.commit()
 
-    try:
-        await db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_output_slug "
-            "ON sessions(output_slug) WHERE output_slug IS NOT NULL AND deleted_at IS NULL"
-        )
-        await db.commit()
-    except Exception:
-        pass
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_output_slug "
+                "ON sessions(output_slug) WHERE output_slug IS NOT NULL AND deleted_at IS NULL"
+            )
+            await db.commit()
+        except Exception:
+            pass
+
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS processed_commands (
+            command_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            command_type TEXT NOT NULL,
+            processed_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_processed_commands_at
+            ON processed_commands (processed_at);
+        """
+    )
+    await db.commit()

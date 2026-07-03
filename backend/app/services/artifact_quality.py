@@ -211,6 +211,26 @@ def inject_nfr_from_intake(rules: dict, idea: str, answers: dict) -> dict:
         nfr["latency_p95_ms"] = 200
     if not nfr.get("availability"):
         nfr["availability"] = "99.5%"
+    if not nfr.get("availability_slo") and any(
+        k in combined for k in ("slo", "sla", "uptime", "доступност", "99.")
+    ):
+        nfr["availability_slo"] = nfr.get("availability") or "99.9%"
+    if not nfr.get("rto_hours") and any(k in combined for k in ("rto", "recovery time")):
+        nfr["rto_hours"] = 4
+    if not nfr.get("rpo_hours") and any(k in combined for k in ("rpo", "recovery point")):
+        nfr["rpo_hours"] = 1
+    if not nfr.get("data_retention_days") and any(
+        k in combined for k in ("retention", "хранени", "gdpr", "152")
+    ):
+        nfr["data_retention_days"] = 365
+    if not nfr.get("compliance"):
+        compliance: list[str] = []
+        if any(k in combined for k in ("gdpr", "персональн")):
+            compliance.append("gdpr")
+        if any(k in combined for k in ("152", "152-фз", "152-fz")):
+            compliance.append("152-fz")
+        if compliance:
+            nfr["compliance"] = compliance
     if not nfr.get("security") and any(
         k in combined for k in ("шифр", "encrypt", "hash", "хэш", "security")
     ):

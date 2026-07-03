@@ -1,25 +1,26 @@
-"""Reconcile sessions left mid-flight after backend restart."""
+"""Reconcile sessions left mid-flight after API or worker restart."""
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
 
 import structlog
 
 from app.services.log_bus import log_bus
-from app.services.session import update_session_status
+from app.services.session import get_session, is_worker_active, update_session_status
 
 logger = structlog.get_logger(__name__)
 
-ACTIVE_STATUSES = frozenset({"running", "waiting_user", "starting", "stuck", "paused"})
+ACTIVE_STATUSES = frozenset({"running", "waiting_user", "starting", "stuck", "paused", "queued"})
 
 
 async def reconcile_orphaned_sessions() -> int:
-    """Mark in-flight sessions as interrupted when no graph task is running."""
+    """Mark in-flight sessions as interrupted when worker heartbeat is stale."""
     from app.db.connection import get_db
-    from app.services.session_runner import session_runner
 
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, status FROM sessions WHERE status IN (?, ?, ?, ?, ?) AND deleted_at IS NULL",
+            "SELECT id, status FROM sessions WHERE status IN (?, ?, ?, ?, ?, ?) AND deleted_at IS NULL",
             tuple(ACTIVE_STATUSES),
         )
         rows = await cursor.fetchall()
@@ -27,7 +28,7 @@ async def reconcile_orphaned_sessions() -> int:
     count = 0
     for row in rows:
         session_id = row["id"]
-        if session_runner.is_running(session_id):
+        if await is_worker_active(session_id):
             continue
         await update_session_status(session_id, "interrupted")
         await log_bus.emit(
@@ -37,7 +38,7 @@ async def reconcile_orphaned_sessions() -> int:
                 "level": "warn",
                 "agent_id": "system",
                 "message": (
-                    "Сессия прервана перезапуском backend. "
+                    "Сессия прервана (worker недоступен или перезапущен). "
                     "Нажмите «Перезапустить пайплайн» или создайте новую сессию."
                 ),
             },

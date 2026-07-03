@@ -54,22 +54,90 @@ services:
     volumes:
       - pink-data:/data
       - ./output:/output
-    runtime: ${DOCKER_GPU_RUNTIME:-nvidia}
     environment:
+      - PINK_SPEC_SERVICE_ROLE=api
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
       - SQLITE_PATH=/data/pink_spec.db
       - VECTOR_PATH=/data/vectors
       - OUTPUT_PATH=/output
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      kafka:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 15s
       timeout: 5s
       retries: 10
+      start_period: 60s
+
+  agent-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+      args: *mirror-build-args
+    container_name: pink-spec-agent-worker
+    env_file:
+      - .env
+      - mirrors.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - pink-data:/data
+      - ./output:/output
+    # GPU optional: set DOCKER_GPU_RUNTIME=nvidia in .env when toolkit is installed
+    runtime: ${DOCKER_GPU_RUNTIME:-}
+    environment:
+      - PINK_SPEC_SERVICE_ROLE=worker
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
+      - SQLITE_PATH=/data/pink_spec.db
+      - VECTOR_PATH=/data/vectors
+      - OUTPUT_PATH=/output
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    depends_on:
+      kafka:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WORKER_HEALTH_PORT:-8001}:8001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  kafka:
+    image: apache/kafka-native:3.8.0
+    container_name: pink-spec-kafka
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
       start_period: 60s
 
   frontend:

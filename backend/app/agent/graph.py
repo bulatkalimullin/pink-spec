@@ -235,6 +235,9 @@ async def run_graph(
         global_llm_max_tokens=get_settings().llm_max_tokens,
         active_llm_model=active_llm_model_name(rules),
     )
+    from app.agent.agents.pipeline_planner import apply_domain_l4_rules
+
+    rules = apply_domain_l4_rules(rules)
 
     state = initial_state(
         session_id=session_id,
@@ -492,7 +495,7 @@ async def run_graph(
                     spec_level == "L4"
                     and len(state.get("review_reports", [])) > prev_review_count
                 ):
-                    l4_update = await handle_l4_post_review(state)
+                    l4_update = await handle_l4_post_review(state, llm_provider)
                     state = {**state, **l4_update}
                     if state.get("current_agent") == "export":
                         break

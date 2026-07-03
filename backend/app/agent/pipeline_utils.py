@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agent.domain_profiles import (
+    get_domain_deliverables,
+    get_domain_work_packages,
+    work_packages_to_pipeline_steps,
+)
+
 AGENT_SEQUENCE = {
     "L1": ["researcher", "product_analyst", "architect", "export"],
     "L2": ["researcher", "product_analyst", "architect", "task_decomposer", "reviewer", "export"],
@@ -73,84 +79,6 @@ BUILTIN_STEP_META: dict[str, dict[str, Any]] = {
 }
 
 TASK_COUNT_BY_LEVEL = {"L1": 0, "L2": 20, "L3": 60, "L4": 100}
-
-L4_DEFAULT_DELIVERABLES: list[dict[str, Any]] = [
-    {
-        "id": "security_spec",
-        "name": "Security Specification",
-        "artifact_key": "security_spec",
-        "prompt_focus": "Threat model, authn/authz, data protection, compliance, security controls",
-    },
-    {
-        "id": "data_model",
-        "name": "Data Model",
-        "artifact_key": "data_model",
-        "prompt_focus": "Entities, relationships, indexes, migrations, data lifecycle",
-    },
-    {
-        "id": "test_strategy",
-        "name": "Test Strategy",
-        "artifact_key": "test_strategy",
-        "prompt_focus": "Unit, integration, e2e, performance, test data, CI gates",
-    },
-    {
-        "id": "deployment_spec",
-        "name": "Deployment Specification",
-        "artifact_key": "deployment_spec",
-        "prompt_focus": "Infrastructure, CI/CD, environments, rollout, rollback",
-    },
-    {
-        "id": "observability_spec",
-        "name": "Observability Specification",
-        "artifact_key": "observability_spec",
-        "prompt_focus": "Logging, metrics, tracing, alerting, SLOs, dashboards",
-    },
-    {
-        "id": "risk_register",
-        "name": "Risk Register",
-        "artifact_key": "risk_register",
-        "prompt_focus": "Technical and product risks, mitigations, owners, severity",
-    },
-    {
-        "id": "migration_plan",
-        "name": "Migration Plan",
-        "artifact_key": "migration_plan",
-        "prompt_focus": "Data migration, phased rollout, backward compatibility",
-    },
-    {
-        "id": "runbook",
-        "name": "Operations Runbook",
-        "artifact_key": "runbook",
-        "prompt_focus": "Incident response, on-call procedures, common operations",
-    },
-]
-
-L4_TASK_PHASES: list[dict[str, Any]] = [
-    {
-        "id": "tasks_foundation",
-        "name": "Tasks: Foundation",
-        "prompt_focus": "01-foundation phase only: repo setup, tooling, CI, env config",
-        "target_count": 25,
-    },
-    {
-        "id": "tasks_backend",
-        "name": "Tasks: Backend",
-        "prompt_focus": "02-backend phase only: API, services, database, business logic",
-        "target_count": 25,
-    },
-    {
-        "id": "tasks_frontend",
-        "name": "Tasks: Frontend",
-        "prompt_focus": "03-frontend phase only: UI components, pages, state, routing",
-        "target_count": 25,
-    },
-    {
-        "id": "tasks_integration",
-        "name": "Tasks: Integration",
-        "prompt_focus": "04-integration phase: E2E wiring, third-party integrations, deployment",
-        "target_count": 25,
-    },
-]
 
 
 def step_builtin_agent_id(step: dict[str, Any]) -> str | None:
@@ -230,34 +158,47 @@ def count_task_decomposer_steps(pipeline: list[dict[str, Any]]) -> int:
 
 
 def append_extra_task_batch(
-    pipeline: list[dict[str, Any]], batch_num: int, target_count: int, focus: str
+    pipeline: list[dict[str, Any]],
+    batch_num: int,
+    target_count: int,
+    focus: str,
+    *,
+    domain: str = "general",
 ) -> list[dict[str, Any]]:
-    step_id = f"tasks_extra_{batch_num}"
+    step_id = f"wp_extra_{batch_num}"
     if any(s.get("id") == step_id for s in pipeline):
         return pipeline
     reviewer_idx = next(
         (i for i, s in enumerate(pipeline) if step_builtin_agent_id(s) == "reviewer"),
         len(pipeline),
     )
+    phase_slug = f"99-extra-{batch_num}"
     new_step = {
         "id": step_id,
-        "name": f"Tasks: Extra Batch {batch_num}",
+        "name": f"Work Package: Extra Batch {batch_num}",
         "executor": "builtin:task_decomposer",
         "executor_agent": "task_decomposer",
         "artifact_key": None,
         "required": True,
         "target_count": target_count,
-        "prompt_focus": focus,
+        "prompt_focus": (
+            f"Work package phase '{phase_slug}': {focus}. "
+            f"Use phase slug '{phase_slug}' for all tasks in this batch."
+        ),
+        "work_package_phase": phase_slug,
     }
     updated = list(pipeline)
     updated.insert(reviewer_idx, new_step)
     return updated
 
 
-def ensure_l4_deliverables(
-    steps: list[dict[str, Any]], min_deliverables: int
+def ensure_domain_deliverables(
+    steps: list[dict[str, Any]],
+    domain: str,
+    min_deliverables: int,
+    maturity: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Add default generic deliverables until min_deliverables is reached."""
+    """Add domain-profile generic deliverables until min_deliverables is reached."""
     generic_count = sum(1 for s in steps if s.get("executor") == "generic")
     if generic_count >= min_deliverables:
         return steps
@@ -271,7 +212,7 @@ def ensure_l4_deliverables(
         len(steps),
     )
     updated = list(steps)
-    for d in L4_DEFAULT_DELIVERABLES:
+    for d in get_domain_deliverables(domain, maturity):
         if generic_count >= min_deliverables:
             break
         if d["artifact_key"] in existing_keys:
@@ -283,7 +224,7 @@ def ensure_l4_deliverables(
                 "name": d["name"],
                 "executor": "generic",
                 "artifact_key": d["artifact_key"],
-                "required": False,
+                "required": d.get("required", False),
                 "prompt_focus": d["prompt_focus"],
             },
         )
@@ -293,43 +234,146 @@ def ensure_l4_deliverables(
     return updated
 
 
-def ensure_l4_task_batches(steps: list[dict[str, Any]], tasks_per_batch: int) -> list[dict[str, Any]]:
-    """Ensure L4 has multiple task decomposer steps if only one exists."""
-    task_steps = [
-        s for s in steps if step_builtin_agent_id(s) == "task_decomposer"
-    ]
-    if len(task_steps) >= 2:
+def ensure_domain_work_packages(
+    steps: list[dict[str, Any]],
+    domain: str,
+    tasks_per_batch: int | None = None,
+    maturity: str | None = None,
+) -> list[dict[str, Any]]:
+    """Ensure domain work packages exist when task decomposer has fewer than 2 steps."""
+    task_steps = [s for s in steps if step_builtin_agent_id(s) == "task_decomposer"]
+    expected_wp = get_domain_work_packages(domain, maturity)
+    existing_wp_ids = {s.get("id") for s in task_steps}
+    missing_wp = [wp for wp in expected_wp if wp["id"] not in existing_wp_ids]
+
+    if len(task_steps) >= 2 and not missing_wp:
         return steps
+
     reviewer_idx = next(
         (i for i, s in enumerate(steps) if step_builtin_agent_id(s) == "reviewer"),
         len(steps),
     )
     updated = [s for s in steps if step_builtin_agent_id(s) != "task_decomposer"]
     insert_at = next(
-        (
-            i
-            for i, s in enumerate(updated)
-            if step_builtin_agent_id(s) == "reviewer"
-        ),
+        (i for i, s in enumerate(updated) if step_builtin_agent_id(s) == "reviewer"),
         len(updated),
     )
     if insert_at == len(updated) and reviewer_idx < len(steps):
         insert_at = reviewer_idx
-    for phase in L4_TASK_PHASES:
-        updated.insert(
-            insert_at,
-            {
-                "id": phase["id"],
-                "name": phase["name"],
-                "executor": "builtin:task_decomposer",
-                "executor_agent": "task_decomposer",
-                "artifact_key": None,
-                "required": True,
-                "target_count": phase.get("target_count", tasks_per_batch),
-                "prompt_focus": phase["prompt_focus"],
-            },
-        )
+
+    wp_steps = work_packages_to_pipeline_steps(
+        expected_wp if not task_steps else missing_wp,
+        tasks_per_batch_override=tasks_per_batch,
+    )
+    for wp_step in wp_steps:
+        if wp_step.get("id") in existing_wp_ids:
+            continue
+        updated.insert(insert_at, wp_step)
         insert_at += 1
+        existing_wp_ids.add(wp_step.get("id"))
+    return updated
+
+
+PROD_SPLIT_DELIVERABLES: dict[str, list[dict[str, str]]] = {
+    "security_spec": [
+        {"id": "threat_model", "name": "Threat Model", "artifact_key": "threat_model"},
+        {"id": "security_controls", "name": "Security Controls", "artifact_key": "security_controls"},
+    ],
+    "deployment_spec": [
+        {"id": "cicd_spec", "name": "CI/CD Specification", "artifact_key": "cicd_spec"},
+        {"id": "environment_spec", "name": "Environment Specification", "artifact_key": "environment_spec"},
+    ],
+}
+
+
+def expand_prod_deliverables(
+    steps: list[dict[str, Any]],
+    domain: str,
+    maturity: str | None,
+) -> list[dict[str, Any]]:
+    """Split combined deliverables into finer production steps when maturity is production+."""
+    from app.agent.spec_maturity import is_production_maturity
+
+    if not maturity or not is_production_maturity(maturity) or domain != "software":
+        return steps
+
+    existing_keys = {s.get("artifact_key") for s in steps if s.get("artifact_key")}
+    updated: list[dict[str, Any]] = []
+
+    for step in steps:
+        key = step.get("artifact_key")
+        if key in PROD_SPLIT_DELIVERABLES:
+            parts = PROD_SPLIT_DELIVERABLES[key]
+            if all(p["artifact_key"] not in existing_keys for p in parts):
+                for part in parts:
+                    updated.append(
+                        {
+                            "id": part["id"],
+                            "name": part["name"],
+                            "executor": "generic",
+                            "artifact_key": part["artifact_key"],
+                            "required": step.get("required", True),
+                            "prompt_focus": step.get("prompt_focus", part["name"]),
+                        }
+                    )
+                    existing_keys.add(part["artifact_key"])
+                continue
+        updated.append(step)
+
+    return updated
+
+
+def named_prod_fillers(
+    domain: str,
+    maturity: str | None,
+    existing_keys: set[str],
+    count: int,
+) -> list[dict[str, Any]]:
+    """Named prod deliverables instead of generic_extra_N."""
+    from app.agent.spec_maturity import is_production_maturity
+
+    fillers: list[dict[str, Any]] = []
+    if not is_production_maturity(maturity or "mvp"):
+        return fillers
+    for d in get_domain_deliverables(domain, maturity):
+        if len(fillers) >= count:
+            break
+        if d["artifact_key"] in existing_keys:
+            continue
+        fillers.append(
+            {
+                "id": d["id"],
+                "name": d["name"],
+                "executor": "generic",
+                "artifact_key": d["artifact_key"],
+                "required": False,
+                "prompt_focus": d["prompt_focus"],
+            }
+        )
+        existing_keys.add(d["artifact_key"])
+    return fillers
+
+
+def insert_pipeline_steps_before_reviewer(
+    pipeline: list[dict[str, Any]],
+    new_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Insert new steps immediately before the reviewer step."""
+    if not new_steps:
+        return pipeline
+    existing_ids = {s.get("id") for s in pipeline}
+    reviewer_idx = next(
+        (i for i, s in enumerate(pipeline) if step_builtin_agent_id(s) == "reviewer"),
+        len(pipeline),
+    )
+    updated = list(pipeline)
+    offset = 0
+    for step in new_steps:
+        if step.get("id") in existing_ids:
+            continue
+        updated.insert(reviewer_idx + offset, step)
+        existing_ids.add(step.get("id"))
+        offset += 1
     return updated
 
 

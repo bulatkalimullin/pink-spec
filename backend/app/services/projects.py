@@ -92,9 +92,9 @@ async def delete_project(session_id: str) -> dict[str, str]:
 
     output_slug = s.get("output_slug") or get_output_slug(session_id)
 
-    from app.services.session_runner import session_runner
+    from app.services.kafka_commands import publish_cancel
 
-    session_runner.request_cancel(session_id)
+    await publish_cancel(session_id)
     watchdog.unregister(session_id)
     clear_intake_event(session_id)
     clear_session(session_id)

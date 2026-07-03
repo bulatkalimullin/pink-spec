@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     ollama_llm_model: str = Field(default="llama3.2", alias="OLLAMA_LLM_MODEL")
     ollama_llm_fallbacks: str = Field(default="", alias="OLLAMA_LLM_FALLBACKS")
     ollama_embedding_model: str = Field(default="nomic-embed-text", alias="OLLAMA_EMBEDDING_MODEL")
+    ollama_embedding_fallback_models: str = Field(
+        default="", alias="OLLAMA_EMBEDDING_FALLBACK_MODELS"
+    )
     ollama_embedding_fallback: Literal["keyword", "none"] = Field(
         default="keyword", alias="OLLAMA_EMBEDDING_FALLBACK"
     )
@@ -106,6 +109,9 @@ class Settings(BaseSettings):
     def ollama_fallback_models(self) -> list[str]:
         return [m.strip() for m in self.ollama_llm_fallbacks.split(",") if m.strip()]
 
+    def ollama_embedding_fallback_model_list(self) -> list[str]:
+        return [m.strip() for m in self.ollama_embedding_fallback_models.split(",") if m.strip()]
+
     def provider_cfg(self) -> dict[str, Any]:
         return {
             "llm_provider": self.llm_provider,
@@ -113,6 +119,7 @@ class Settings(BaseSettings):
             "ollama_llm_model": self.ollama_llm_model,
             "ollama_llm_fallbacks": self.ollama_fallback_models(),
             "ollama_embedding_model": self.ollama_embedding_model or None,
+            "ollama_embedding_fallback_models": self.ollama_embedding_fallback_model_list(),
             "ollama_embedding_fallback": self.ollama_embedding_fallback,
             "ollama_keep_alive": self.ollama_keep_alive,
             "ollama_timeout_sec": self.ollama_timeout_sec,
@@ -164,6 +171,7 @@ class Settings(BaseSettings):
             "ollama_llm_model": self.ollama_llm_model,
             "ollama_llm_fallbacks": self.ollama_llm_fallbacks,
             "ollama_embedding_model": self.ollama_embedding_model,
+            "ollama_embedding_fallback_models": self.ollama_embedding_fallback_models,
             "ollama_embedding_fallback": self.ollama_embedding_fallback,
             "ollama_keep_alive": self.ollama_keep_alive,
             "ollama_timeout_sec": self.ollama_timeout_sec,

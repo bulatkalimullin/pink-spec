@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections import defaultdict
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from app.db.connection import get_db
+
+if TYPE_CHECKING:
+    from app.kafka.event_bridge import KafkaEventPublisher
 
 logger = structlog.get_logger(__name__)
 
@@ -23,6 +27,16 @@ class LogBus:
         self._subscribers: dict[str, set[asyncio.Queue]] = defaultdict(set)
         self._seq_counters: dict[str, int] = defaultdict(int)
         self._persist_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=10_000)
+        self._kafka_publisher: KafkaEventPublisher | None = None
+        self._service_role = os.getenv("PINK_SPEC_SERVICE_ROLE", "api")
+
+    def enable_worker_mode(self, publisher: KafkaEventPublisher) -> None:
+        self._kafka_publisher = publisher
+        self._service_role = "worker"
+
+    @property
+    def is_worker(self) -> bool:
+        return self._service_role == "worker"
 
     # --- Subscription management ---
 
@@ -45,6 +59,19 @@ class LogBus:
             "session_id": session_id,
             "payload": payload,
         }
+        if self.is_worker and self._kafka_publisher:
+            await self._kafka_publisher.publish_envelope(envelope)
+            return
+        await self._broadcast(session_id, envelope)
+        await self._enqueue_persist(envelope)
+
+    async def ingest_external(self, envelope: dict[str, Any]) -> None:
+        """Events from Kafka (API process) — fan-out to WS + persist."""
+        session_id = envelope.get("session_id", "")
+        if session_id:
+            seq = envelope.get("seq", 0)
+            if seq > self._seq_counters[session_id]:
+                self._seq_counters[session_id] = seq
         await self._broadcast(session_id, envelope)
         await self._enqueue_persist(envelope)
 

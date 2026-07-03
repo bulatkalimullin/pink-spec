@@ -27,11 +27,34 @@ export type Messages = {
   settings: Record<string, string>;
   rules: Record<string, string>;
   workspace: Record<string, string>;
+  maturity: {
+    label: string;
+    mvp: string;
+    production: string;
+    enterprise: string;
+    hint: string;
+  };
   llm: {
     label: string;
     hint: string;
     loading: string;
+    providersLoadFailed: string;
     ollamaUnavailable: string;
     yandexUnavailable: string;
+    presets: string;
+    presetNotReady: string;
+    llmModel: string;
+    llmFallbacks: string;
+    embeddingModel: string;
+    embeddingFallbacks: string;
+    finalEmbeddingFallback: string;
+    missingModels: string;
+    pullHint: string;
+    copyPull: string;
+    refreshModels: string;
+    addFallback: string;
+    removeFallback: string;
+    noneFallback: string;
+    keywordFallback: string;
   };
 };

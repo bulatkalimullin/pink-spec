@@ -1,11 +1,14 @@
-"""RAG document ingestion endpoint."""
+"""RAG document ingestion — queues ingest job on agent-worker via Kafka."""
 
 from __future__ import annotations
 
-import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from app.config import get_settings
+from app.services.kafka_commands import publish_rag_ingest
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag"])
 
@@ -13,7 +16,7 @@ ALLOWED_EXTENSIONS = {".md", ".txt", ".pdf"}
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
 
-@router.post("/ingest")
+@router.post("/ingest", status_code=202)
 async def ingest_document(session_id: str, file: UploadFile = File(...)):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -23,26 +26,15 @@ async def ingest_document(session_id: str, file: UploadFile = File(...)):
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(413, "File too large (max 10MB)")
 
-    # Write to temp file and ingest
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    settings = get_settings()
+    ingest_dir = Path(settings.vector_path) / "ingest_queue" / session_id
+    ingest_dir.mkdir(parents=True, exist_ok=True)
+    dest = ingest_dir / f"{uuid.uuid4().hex}{suffix}"
+    dest.write_bytes(content)
 
-    try:
-        from app.rag.ingest import ingest_sources
-        from app.rag.retriever import BM25Retriever, ChromaRetriever
-
-        # Try to get embedding provider from app state
-        try:
-            from app.main import embedding_provider  # type: ignore
-
-            retriever = ChromaRetriever(
-                session_id=session_id, embedding_provider=embedding_provider
-            )
-        except Exception:
-            retriever = BM25Retriever()
-
-        result = await ingest_sources([str(tmp_path)], retriever, session_id)
-        return {"status": "ok", **result}
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    await publish_rag_ingest(
+        session_id,
+        temp_paths=[str(dest)],
+        sources_meta=[{"filename": file.filename, "size": len(content)}],
+    )
+    return {"status": "queued", "path": str(dest)}

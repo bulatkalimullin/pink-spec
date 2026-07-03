@@ -25,7 +25,7 @@ RUN uv pip install --system --no-cache \
     langchain langchain-community langgraph \
     chromadb langchain-chroma rank-bm25 \
     psutil aiosqlite sqlmodel \
-    httpx python-dotenv structlog anyio
+    httpx python-dotenv structlog anyio aiokafka
 
 RUN pip install --no-cache-dir pynvml || true
 

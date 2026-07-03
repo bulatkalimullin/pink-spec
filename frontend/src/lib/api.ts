@@ -46,6 +46,28 @@ export async function getLanguages() {
   return r.json();
 }
 
+export interface OllamaRulesConfig {
+  llm_model: string;
+  fallback_models: string[];
+  embedding_model: string;
+  embedding_fallback_models: string[];
+  embedding_fallback: "keyword" | "none";
+}
+
+export interface OllamaPreset {
+  id: string;
+  label: string;
+  description: string;
+  config: OllamaRulesConfig;
+  missing_models: string[];
+  ready: boolean;
+}
+
+export interface EmbeddingFallbackOption {
+  value: "keyword" | "none";
+  label: string;
+}
+
 export interface LlmProviderInfo {
   id: "ollama" | "yandexgpt";
   label: string;
@@ -55,11 +77,25 @@ export interface LlmProviderInfo {
   default_model: string;
   config_key: string;
   requires_env?: string[];
+  embeddings?: {
+    doc_model: string;
+    query_model: string;
+  };
+}
+
+export interface OllamaProviderInfo extends LlmProviderInfo {
+  id: "ollama";
+  installed_models: string[];
+  llm_model_hints: string[];
+  embedding_model_hints: string[];
+  presets: OllamaPreset[];
+  embedding_fallback_options: EmbeddingFallbackOption[];
+  default_config: OllamaRulesConfig;
 }
 
 export interface LlmProvidersResponse {
   default: string;
-  providers: LlmProviderInfo[];
+  providers: Array<LlmProviderInfo | OllamaProviderInfo>;
 }
 
 export async function getLlmProviders(): Promise<LlmProvidersResponse> {

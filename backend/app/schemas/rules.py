@@ -49,10 +49,26 @@ class L4Config(BaseModel):
     until_confident: bool = True
 
 
+class ProjectDomain(StrEnum):
+    general = "general"
+    software = "software"
+    education = "education"
+    embedded = "embedded"
+    hardware = "hardware"
+    content = "content"
+
+
+class SpecMaturity(StrEnum):
+    mvp = "mvp"
+    production = "production"
+    enterprise = "enterprise"
+
+
 class ProjectConfig(BaseModel):
     name: str = "my-project"
-    domain: str = "general"
+    domain: ProjectDomain = ProjectDomain.general
     idea_summary: str | None = None
+    spec_maturity: SpecMaturity | None = None
 
 
 class StackConfig(BaseModel):
@@ -71,7 +87,12 @@ class ConstraintsConfig(BaseModel):
 class NFRConfig(BaseModel):
     latency_p95_ms: int | None = None
     availability: str | None = None
+    availability_slo: str | None = None
     security: list[str] = Field(default_factory=list)
+    rto_hours: int | None = None
+    rpo_hours: int | None = None
+    data_retention_days: int | None = None
+    compliance: list[str] = Field(default_factory=list)
 
 
 class OutputLanguage(StrEnum):
@@ -102,7 +123,8 @@ class OllamaConfig(BaseModel):
     llm_model: str = "qwen2.5:7b"
     fallback_models: list[str] = Field(default_factory=list)
     embedding_model: str = "nomic-embed-text"
-    embedding_fallback: str = "keyword"
+    embedding_fallback_models: list[str] = Field(default_factory=list)
+    embedding_fallback: Literal["keyword", "none"] = "keyword"
     temperature: float = Field(0.2, ge=0.0, le=1.0)
     max_tokens: int = Field(4096, ge=256, le=32768)
     keep_alive: str = "5m"
@@ -227,11 +249,27 @@ class Rules(BaseModel):
 
     @model_validator(mode="after")
     def apply_l4_defaults(self) -> Rules:
+        from app.agent.spec_maturity import maturity_pipeline_defaults, resolve_spec_maturity
+
+        maturity = resolve_spec_maturity(self.model_dump(), self.spec_level.value)
+        defaults = maturity_pipeline_defaults(maturity, self.spec_level.value)
+
+        if self.spec_level in (SpecLevel.L3, SpecLevel.L4):
+            if self.pipeline.min_steps is None:
+                self.pipeline.min_steps = defaults["min_steps"]
+            if self.pipeline.min_deliverables is None:
+                self.pipeline.min_deliverables = defaults["min_deliverables"]
+            if self.pipeline.max_replan_cycles < defaults["max_replan_cycles"]:
+                self.pipeline.max_replan_cycles = defaults["max_replan_cycles"]
+            if maturity in ("production", "enterprise") and self.spec_level == SpecLevel.L4:
+                if self.l4.tasks_per_batch < defaults["tasks_per_batch"]:
+                    self.l4.tasks_per_batch = defaults["tasks_per_batch"]
+
         if self.spec_level == SpecLevel.L4:
             if self.pipeline.min_steps is None:
-                self.pipeline.min_steps = 12
+                self.pipeline.min_steps = defaults["min_steps"]
             if self.pipeline.min_deliverables is None:
-                self.pipeline.min_deliverables = 8
+                self.pipeline.min_deliverables = defaults["min_deliverables"]
             if self.ollama.max_tokens < 8192:
                 self.ollama.max_tokens = 8192
         return self

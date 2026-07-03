@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from app.agent.agents.base import BaseAgent, PATCH_REPAIR_PROMPT, PATCH_SYSTEM_PROMPT
+from app.agent.spec_maturity import build_maturity_prompt_block, resolve_spec_maturity
 from app.agent.state import MultiAgentState
 from app.agent.supervisor import is_artifact_patch_exhausted, update_patch_unchanged_counts
 from app.services.artifact_store import artifact_exists, placeholder_for, read_artifact
@@ -89,13 +90,18 @@ class RefinementFixerAgent(BaseAgent):
         annotated = annotate_lines(body)
         issues_text = self._format_refinement_issues(state, artifact_key)
         issue_count = len((state.get("refinement_issues") or {}).get(artifact_key, []))
+        rules = state.get("_rules_snapshot") or {}
+        maturity = resolve_spec_maturity(rules, str(rules.get("spec_level", "L2")))
+        domain = str((rules.get("project") or {}).get("domain", "general"))
+        maturity_block = build_maturity_prompt_block(maturity, domain)
 
         patch_messages = [
             {
                 "role": "system",
                 "content": (
-                    f"{PATCH_SYSTEM_PROMPT}\n\n"
+                    f"{PATCH_SYSTEM_PROMPT}\n\n{maturity_block}\n\n"
                     "Fix ALL listed issues in this response. "
+                    "Do not simplify production scope to MVP unless marked [DEFERRED]. "
                     "Use as many SEARCH/REPLACE blocks as needed."
                 ),
             },
