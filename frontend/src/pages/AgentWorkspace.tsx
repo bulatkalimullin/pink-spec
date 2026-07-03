@@ -75,6 +75,7 @@ export default function AgentWorkspace() {
 
   const isLg = useMediaQuery("(min-width: 1024px)");
   const isXl = useMediaQuery("(min-width: 1280px)");
+  const isExportable = sessionStatus === "completed" || sessionStatus === "completed_partial";
 
   useAgentWebSocket(sessionId ?? null);
   useSessionPolling(sessionId ?? null);
@@ -111,6 +112,10 @@ export default function AgentWorkspace() {
     if (!sessionId) return;
     try {
       const blob = await exportSession(sessionId);
+      if (blob.size < 64) {
+        toast.error("Export пустой — артефакты не найдены на диске");
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -141,7 +146,7 @@ export default function AgentWorkspace() {
     if (!sessionId) return null;
     switch (activeTab) {
       case "activity":
-        return <ActivityFeed />;
+        return <ActivityFeed sessionId={sessionId} />;
       case "supervisor":
         return (
           <div className="flex flex-col h-full min-h-0 p-3 space-y-3 overflow-y-auto">
@@ -252,7 +257,7 @@ export default function AgentWorkspace() {
         })}
       </div>
 
-      {!sidebarCollapsed && sessionStatus === "completed" && (
+      {!sidebarCollapsed && isExportable && (
         <div className="border-t border-border p-2 space-y-1">
           <button
             onClick={() => void handleExport()}
@@ -413,7 +418,7 @@ export default function AgentWorkspace() {
               )}
             </button>
           ))}
-          {sessionStatus === "completed" && (
+          {isExportable && (
             <>
               <hr className="border-border" />
               <button

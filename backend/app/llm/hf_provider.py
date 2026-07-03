@@ -66,6 +66,52 @@ class OllamaLLMFallback:
             yield word + " "
 
 
+class OllamaEmbeddingFallbackChain:
+    """Try multiple Ollama embedding models at runtime, then optional keyword fallback."""
+
+    def __init__(
+        self,
+        providers: list[OllamaEmbeddingProvider],
+        model_names: list[str],
+        *,
+        keyword_fallback: KeywordFallbackProvider | None = None,
+    ):
+        self._providers = providers
+        self._model_names = model_names
+        self._keyword = keyword_fallback
+        self.model_name = model_names[0] if model_names else "keyword"
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        last_err: Exception | None = None
+        for provider, model in zip(self._providers, self._model_names, strict=True):
+            try:
+                return await provider.embed_documents(texts)
+            except Exception as e:
+                last_err = e
+                logger.warning("ollama_embedding_failed", model=model, error=str(e))
+        if self._keyword is not None:
+            logger.warning("embedding_fallback_keyword")
+            return await self._keyword.embed_documents(texts)
+        raise RuntimeError(
+            f"All Ollama embedding models failed. Last: {last_err}"
+        ) from last_err
+
+    async def embed_query(self, text: str) -> list[float]:
+        last_err: Exception | None = None
+        for provider, model in zip(self._providers, self._model_names, strict=True):
+            try:
+                return await provider.embed_query(text)
+            except Exception as e:
+                last_err = e
+                logger.warning("ollama_embedding_failed", model=model, error=str(e))
+        if self._keyword is not None:
+            logger.warning("embedding_fallback_keyword")
+            return await self._keyword.embed_query(text)
+        raise RuntimeError(
+            f"All Ollama embedding models failed. Last: {last_err}"
+        ) from last_err
+
+
 def build_llm_provider(cfg: dict) -> LLMProvider:
     provider = str(cfg.get("llm_provider", "ollama")).lower()
     if provider == "yandexgpt":
@@ -158,30 +204,47 @@ def _build_ollama_embedding_provider(cfg: dict) -> EmbeddingProvider:
     final_fallback: str = cfg.get("ollama_embedding_fallback", "keyword")
     timeout_sec: float = float(cfg.get("ollama_timeout_sec", 120))
     models = _ollama_embedding_model_chain(cfg)
+    keyword = KeywordFallbackProvider() if final_fallback == "keyword" else None
 
-    last_err: Exception | None = None
-    for model in models:
-        try:
-            provider = OllamaEmbeddingProvider(base_url, model, timeout_sec=timeout_sec)
-            provider.verify()
-            logger.info("embedding_provider_ready", mode="ollama", model=model, base_url=base_url)
-            return provider
-        except Exception as e:
-            last_err = e
-            logger.warning("ollama_embedding_failed", model=model, error=str(e))
-
-    if final_fallback == "keyword":
-        logger.warning("embedding_fallback_keyword")
-        return KeywordFallbackProvider()
-
-    if final_fallback == "none":
-        tried = ", ".join(models) if models else "(none configured)"
+    if not models:
+        if keyword is not None:
+            logger.warning("embedding_fallback_keyword")
+            return keyword
         raise RuntimeError(
-            f"All Ollama embedding models unavailable ({tried}) "
-            "and OLLAMA_EMBEDDING_FALLBACK=none"
-        ) from last_err
+            "No embedding provider available. Set OLLAMA_EMBEDDING_MODEL "
+            "or OLLAMA_EMBEDDING_FALLBACK=keyword"
+        )
 
-    raise RuntimeError(
-        "No embedding provider available. Set OLLAMA_EMBEDDING_MODEL "
-        "or OLLAMA_EMBEDDING_FALLBACK=keyword"
+    providers = [
+        OllamaEmbeddingProvider(base_url, model, timeout_sec=timeout_sec) for model in models
+    ]
+    verified: list[str] = []
+    for provider, model in zip(providers, models, strict=True):
+        try:
+            provider.verify()
+            verified.append(model)
+        except Exception as e:
+            logger.warning("ollama_embedding_verify_failed", model=model, error=str(e))
+
+    if not verified and keyword is None:
+        tried = ", ".join(models)
+        raise RuntimeError(
+            f"All Ollama embedding models unavailable at startup ({tried}) "
+            "and OLLAMA_EMBEDDING_FALLBACK=none"
+        )
+
+    chain = OllamaEmbeddingFallbackChain(
+        providers,
+        models,
+        keyword_fallback=keyword,
     )
+    logger.info(
+        "embedding_provider_ready",
+        mode="ollama",
+        model=models[0],
+        fallbacks=models[1:] if len(models) > 1 else [],
+        verified_at_startup=verified,
+        keyword_fallback=keyword is not None,
+        base_url=base_url,
+    )
+    return chain

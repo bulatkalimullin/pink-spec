@@ -56,3 +56,26 @@ def test_config_missing_models():
     assert "qwen2.5:7b" in missing
     assert "nomic-embed-text" in missing
     assert "gemma3:4b" not in missing
+
+
+def test_ultra_light_preset_ready_on_minimal_install():
+    installed = ["gemma3:1b", "gemma3:4b", "locusai/all-minilm-l6-v2:latest"]
+    presets = {p["id"]: p for p in enrich_presets(installed)}
+    assert presets["ultra_light"]["ready"] is True
+    assert presets["ultra_light"]["config"]["llm_model"] == "gemma3:1b"
+
+
+def test_max_aggressive_preset_ready_with_user_models():
+    installed = [
+        "dzgg/Qwen3.5-Uncensored-HauhauCS-Aggressive:4b",
+        "jayeshpandit2480/gemma3-UNCENSORED:4b",
+        "project-qwen3.5-4b-uncensored-hauhaucs-aggressive-q4_k_m:latest",
+        "gemma3:4b",
+        "gemma3:1b",
+        "nomic-embed-text:latest",
+        "embeddinggemma:latest",
+        "locusai/all-minilm-l6-v2:latest",
+    ]
+    presets = {p["id"]: p for p in enrich_presets(installed)}
+    assert presets["max_aggressive"]["ready"] is True
+    assert presets["max_aggressive"]["config"]["embedding_model"] == "nomic-embed-text:latest"

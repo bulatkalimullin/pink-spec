@@ -22,12 +22,9 @@ ARTIFACT_EXT_MAP = {
 
 
 def session_output_dir(session_id: str) -> Path:
-    from app.services.output_paths import get_output_slug
+    from app.services.output_paths import align_output_folder
 
-    slug = get_output_slug(session_id)
-    path = OUTPUT_ROOT / slug
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return align_output_folder(session_id)
 
 
 def docs_dir(session_id: str) -> Path:
@@ -237,9 +234,13 @@ def read_task_file(session_id: str, relative_path: str) -> str:
 def build_zip(session_id: str) -> bytes:
     output_dir = session_output_dir(session_id)
     buf = BytesIO()
+    file_count = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in output_dir.rglob("*"):
             if file.is_file():
+                file_count += 1
                 zf.write(file, arcname=file.relative_to(output_dir.parent))
+    if file_count == 0:
+        raise FileNotFoundError(f"No output files for session {session_id}")
     buf.seek(0)
     return buf.read()

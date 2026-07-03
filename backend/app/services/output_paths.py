@@ -6,7 +6,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from app.config import get_settings
+
+logger = structlog.get_logger(__name__)
 
 DEFAULT_PROJECT_NAME = "my-project"
 _slug_cache: dict[str, str] = {}
@@ -56,7 +60,59 @@ def unregister_output_slug(session_id: str) -> None:
 
 def get_output_slug(session_id: str) -> str:
     """Resolve disk folder name; fallback to session_id for legacy sessions."""
-    return _slug_cache.get(session_id, session_id)
+    cached = _slug_cache.get(session_id)
+    if cached:
+        return cached
+    db_slug = _load_slug_from_db(session_id)
+    if db_slug:
+        register_output_slug(session_id, db_slug)
+        return db_slug
+    return session_id
+
+
+def _load_slug_from_db(session_id: str) -> str | None:
+    """Sync DB lookup when in-memory cache is cold (e.g. Kafka worker process)."""
+    import sqlite3
+
+    from app.db.connection import DB_PATH
+
+    if not DB_PATH.is_file():
+        return None
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            row = db.execute(
+                "SELECT output_slug FROM sessions WHERE id = ? AND deleted_at IS NULL",
+                (session_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row and row[0]:
+        return str(row[0])
+    return None
+
+
+def align_output_folder(session_id: str) -> Path:
+    """Return the directory that holds session artifacts; heal uuid→slug drift."""
+    import shutil
+
+    slug = get_output_slug(session_id)
+    slug_dir = output_root() / slug
+    uuid_dir = output_root() / session_id
+
+    def file_count(path: Path) -> int:
+        if not path.is_dir():
+            return 0
+        return sum(1 for f in path.rglob("*") if f.is_file())
+
+    if slug != session_id and file_count(uuid_dir) > 0 and file_count(slug_dir) == 0:
+        slug_dir.parent.mkdir(parents=True, exist_ok=True)
+        if slug_dir.exists():
+            shutil.rmtree(slug_dir)
+        uuid_dir.rename(slug_dir)
+        logger.info("output_folder_aligned", session_id=session_id, output_slug=slug)
+
+    slug_dir.mkdir(parents=True, exist_ok=True)
+    return slug_dir
 
 
 def session_id_for_slug(output_slug: str) -> str | None:

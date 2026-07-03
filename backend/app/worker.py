@@ -147,6 +147,9 @@ async def run_worker() -> None:
 
     settings = get_settings()
     await init_db()
+    from app.services.output_paths import load_all_output_slugs
+
+    await load_all_output_slugs()
     await provider_bootstrap.init_providers(settings=settings)
 
     log_bus.enable_worker_mode(_event_publisher)

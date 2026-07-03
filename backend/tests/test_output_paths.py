@@ -69,3 +69,23 @@ def test_get_output_slug_fallback():
     assert get_output_slug(sid) == "my-project"
     unregister_output_slug(sid)
     assert get_output_slug(sid) == sid
+
+
+def test_align_output_folder_moves_uuid_to_slug(tmp_path, monkeypatch):
+    from app.services.output_paths import align_output_folder, register_output_slug
+
+    monkeypatch.setattr("app.services.output_paths.output_root", lambda: tmp_path)
+    session_id = "114f646a-b4a6-425e-af6a-1050b373f603"
+    slug = "bluetooth-hack-python-program"
+    register_output_slug(session_id, slug)
+
+    uuid_dir = tmp_path / session_id
+    docs = uuid_dir / "docs"
+    docs.mkdir(parents=True)
+    (docs / "scope_spec.md").write_text("# scope", encoding="utf-8")
+    (tmp_path / slug).mkdir()
+
+    resolved = align_output_folder(session_id)
+    assert resolved == tmp_path / slug
+    assert (resolved / "docs" / "scope_spec.md").is_file()
+    assert not uuid_dir.exists()

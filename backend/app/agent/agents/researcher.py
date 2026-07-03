@@ -42,27 +42,8 @@ class ResearcherAgent(BaseAgent):
         from app.rag.retriever import BM25Retriever, ChromaRetriever
         from app.rag.saturation import run_saturation
 
-        # Build retriever
-        try:
-            retriever = ChromaRetriever(
-                session_id=session_id, embedding_provider=self._embedding_provider
-            )
-        except Exception as e:
-            await self._log(session_id, "warn", f"ChromaDB unavailable ({e}), using BM25 fallback")
-            await log_bus.emit(
-                session_id,
-                "fallback_triggered",
-                {
-                    "layer": "rag",
-                    "step": "retriever",
-                    "from": "chroma",
-                    "to": "bm25",
-                    "message": f"ChromaDB unavailable: {e}",
-                },
-            )
-            retriever = BM25Retriever()
+        retriever, retriever_kind = await self._build_retriever(session_id)
 
-        # Ingest sources
         sources = rag_cfg.get("sources", [])
         if sources:
             await emit_stage_changed(
@@ -81,7 +62,6 @@ class ResearcherAgent(BaseAgent):
                 f"Ingest complete: {ingest_result['files_ok']} files, {ingest_result['chunks']} chunks",
             )
 
-        # Saturation
         idea = state["idea"]
         seed_queries = [
             idea,
@@ -90,37 +70,15 @@ class ResearcherAgent(BaseAgent):
         ]
         sat_cfg = {**rag_cfg.get("saturation", {}), "top_k": rag_cfg.get("top_k", 8)}
 
-        try:
-            saturation_report = await run_saturation(
-                session_id=session_id,
-                seed_queries=seed_queries,
-                embedding_provider=self._embedding_provider,
-                retriever=retriever,
-                cfg=sat_cfg,
-                state=state,
-            )
-        except Exception as e:
-            await self._log(
-                session_id, "warn", f"RAG saturation failed ({e}), skipping researcher phase"
-            )
-            await log_bus.emit(
-                session_id,
-                "fallback_triggered",
-                {
-                    "layer": "rag",
-                    "step": "saturation",
-                    "from": "chroma",
-                    "to": "skipped",
-                    "message": str(e),
-                },
-            )
-            saturation_report = {
-                "status": "skipped",
-                "iterations": 0,
-                "chunks_collected": 0,
-                "context_brief": "",
-                "query_history": seed_queries,
-            }
+        saturation_report = await self._run_saturation_with_fallback(
+            state=state,
+            session_id=session_id,
+            retriever=retriever,
+            retriever_kind=retriever_kind,
+            sources=sources,
+            seed_queries=seed_queries,
+            sat_cfg=sat_cfg,
+        )
 
         await self._log(
             session_id,
@@ -137,7 +95,6 @@ class ResearcherAgent(BaseAgent):
             sub_progress=1.0,
         )
 
-        # Update context state
         new_context = dict(state.get("context", {}))
         new_context["saturation_report"] = saturation_report
 
@@ -151,3 +108,122 @@ class ResearcherAgent(BaseAgent):
             "context": new_context,
             "current_agent": "supervisor",
         }
+
+    async def _build_retriever(self, session_id: str) -> tuple[Any, str]:
+        from app.rag.retriever import BM25Retriever, ChromaRetriever
+
+        try:
+            return (
+                ChromaRetriever(
+                    session_id=session_id, embedding_provider=self._embedding_provider
+                ),
+                "chroma",
+            )
+        except Exception as e:
+            await self._log(session_id, "warn", f"ChromaDB unavailable ({e}), using BM25 fallback")
+            await log_bus.emit(
+                session_id,
+                "fallback_triggered",
+                {
+                    "layer": "rag",
+                    "step": "retriever",
+                    "from": "chroma",
+                    "to": "bm25",
+                    "message": f"ChromaDB unavailable: {e}",
+                },
+            )
+            return BM25Retriever(), "bm25"
+
+    async def _run_saturation_with_fallback(
+        self,
+        *,
+        state: MultiAgentState,
+        session_id: str,
+        retriever: Any,
+        retriever_kind: str,
+        sources: list[str],
+        seed_queries: list[str],
+        sat_cfg: dict,
+    ) -> dict[str, Any]:
+        from app.rag.ingest import ingest_sources
+        from app.rag.retriever import BM25Retriever
+        from app.rag.saturation import run_saturation
+
+        try:
+            return await run_saturation(
+                session_id=session_id,
+                seed_queries=seed_queries,
+                embedding_provider=self._embedding_provider,
+                retriever=retriever,
+                cfg=sat_cfg,
+                state=state,
+            )
+        except Exception as e:
+            await self._log(
+                session_id,
+                "warn",
+                f"RAG saturation failed ({e}), trying BM25 fallback",
+            )
+
+        if retriever_kind == "chroma":
+            await log_bus.emit(
+                session_id,
+                "fallback_triggered",
+                {
+                    "layer": "rag",
+                    "step": "saturation",
+                    "from": "chroma",
+                    "to": "bm25",
+                    "message": "Embedding saturation failed; retrying with BM25 retriever",
+                },
+            )
+            bm25 = BM25Retriever()
+            if sources:
+                await ingest_sources(sources, bm25, session_id)
+            retriever = bm25
+        else:
+            await log_bus.emit(
+                session_id,
+                "fallback_triggered",
+                {
+                    "layer": "rag",
+                    "step": "saturation",
+                    "from": "bm25",
+                    "to": "bm25_novelty_skip",
+                    "message": "BM25 saturation failed; retrying without embedding novelty",
+                },
+            )
+
+        try:
+            return await run_saturation(
+                session_id=session_id,
+                seed_queries=seed_queries,
+                embedding_provider=self._embedding_provider,
+                retriever=retriever,
+                cfg={**sat_cfg, "skip_embedding_novelty": True},
+                state=state,
+            )
+        except Exception as e:
+            await self._log(
+                session_id,
+                "warn",
+                f"RAG saturation fallback failed ({e}), skipping researcher phase",
+            )
+            await log_bus.emit(
+                session_id,
+                "fallback_triggered",
+                {
+                    "layer": "rag",
+                    "step": "saturation",
+                    "from": retriever_kind,
+                    "to": "skipped",
+                    "message": str(e),
+                },
+            )
+            return {
+                "status": "skipped",
+                "iterations": 0,
+                "chunks_collected": 0,
+                "context_brief": "",
+                "query_history": seed_queries,
+            }

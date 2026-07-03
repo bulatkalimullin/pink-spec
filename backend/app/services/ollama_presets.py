@@ -25,6 +25,9 @@ OLLAMA_LLM_HINTS = [
     "gemma3:4b",
     "gemma3:1b",
     "jayeshpandit2480/gemma3-UNCENSORED:4b",
+    "dzgg/Qwen3.5-Uncensored-HauhauCS-Aggressive:4b",
+    "project-qwen3.5-4b-uncensored-hauhaucs-aggressive-q4_k_m:latest",
+    "krishairnd/Gemma-4-Uncensored:latest",
     "llama3.2",
     "mistral",
 ]
@@ -86,6 +89,44 @@ OLLAMA_PRESETS: list[OllamaPresetDef] = [
             "fallback_models": ["gemma3:1b"],
             "embedding_model": "locusai/all-minilm-l6-v2:latest",
             "embedding_fallback_models": ["embeddinggemma:latest", "nomic-embed-text"],
+            "embedding_fallback": "keyword",
+        },
+    },
+    {
+        "id": "ultra_light",
+        "label": "Ultra Light (RTX 3050 6GB)",
+        "description": (
+            "Минимум VRAM (~1 GB LLM + 90 MB embed). Быстрые L1–L2 прогоны; "
+            "L4 будет медленным и с более слабым текстом"
+        ),
+        "config": {
+            "llm_model": "gemma3:1b",
+            "fallback_models": ["gemma3:4b"],
+            "embedding_model": "locusai/all-minilm-l6-v2:latest",
+            "embedding_fallback_models": [],
+            "embedding_fallback": "keyword",
+        },
+    },
+    {
+        "id": "max_aggressive",
+        "label": "MAX Aggressive (RTX 3050 6GB)",
+        "description": (
+            "Uncensored 4B + качественный RAG. Без qwen2.5:7b — не влезает в 6 GB "
+            "вместе с embed. Цепочка uncensored-fallback"
+        ),
+        "config": {
+            "llm_model": "dzgg/Qwen3.5-Uncensored-HauhauCS-Aggressive:4b",
+            "fallback_models": [
+                "jayeshpandit2480/gemma3-UNCENSORED:4b",
+                "project-qwen3.5-4b-uncensored-hauhaucs-aggressive-q4_k_m:latest",
+                "gemma3:4b",
+                "gemma3:1b",
+            ],
+            "embedding_model": "nomic-embed-text:latest",
+            "embedding_fallback_models": [
+                "embeddinggemma:latest",
+                "locusai/all-minilm-l6-v2:latest",
+            ],
             "embedding_fallback": "keyword",
         },
     },

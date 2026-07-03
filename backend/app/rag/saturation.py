@@ -75,6 +75,10 @@ async def run_saturation(
 
         if not new_chunks:
             avg_novelty = 0.0
+        elif cfg.get("skip_embedding_novelty"):
+            for chunk in new_chunks:
+                collected_texts.append(chunk["text"])
+            avg_novelty = 1.0
         else:
             vecs = await embedding_provider.embed_documents([c["text"] for c in new_chunks])
             novelties = [_min_distance_to_set(v, collected_vecs) for v in vecs]
